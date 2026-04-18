@@ -12,6 +12,8 @@ Subcommands:
 """
 from __future__ import annotations
 
+import re
+
 import click
 from rich.console import Console
 from rich.table import Table
@@ -21,6 +23,8 @@ from paircode.detect import detect_all
 from paircode.drive import drive_full, drive_research, run_stage
 from paircode.handshake import propose_roster, proposed_as_yaml_dicts
 from paircode.installer import install_all, uninstall_all
+from paircode.journey import note_focus_opened
+from paircode.seal import discover_latest_versions, seal_stage
 from paircode.state import (
     find_paircode,
     init_paircode,
@@ -176,8 +180,30 @@ def status() -> None:
         ftable = Table(show_header=True, header_style="bold")
         ftable.add_column("#")
         ftable.add_column("focus")
+        ftable.add_column("research")
+        ftable.add_column("plan")
+        ftable.add_column("execute")
         for i, d in enumerate(state.focus_dirs, 1):
-            ftable.add_row(str(i), d.name)
+            per_stage_cols = []
+            for stage in ("research", "plan", "execute"):
+                stage_dir = d / stage
+                if not stage_dir.exists():
+                    per_stage_cols.append("[dim]—[/dim]")
+                    continue
+                latest = discover_latest_versions(stage_dir)
+                if not latest:
+                    per_stage_cols.append("[dim]empty[/dim]")
+                    continue
+                final_count = sum(
+                    1 for pid in latest if (stage_dir / f"{pid}-FINAL.md").exists()
+                )
+                v_max = max(
+                    int(re.search(r"v(\d+)", p.name).group(1))  # type: ignore[union-attr]
+                    for p in latest.values()
+                )
+                sealed_note = f" ([green]{final_count} sealed[/green])" if final_count else ""
+                per_stage_cols.append(f"v{v_max}{sealed_note}")
+            ftable.add_row(str(i), d.name, *per_stage_cols)
         console.print(ftable)
 
 
@@ -223,8 +249,35 @@ def focus(name: str | None, prompt: str | None) -> None:
     except FileExistsError as exc:
         console.print(f"[red]{exc}[/red]")
         return
+    note_focus_opened(state, focus_dir.name)
     console.print(f"[green]✓[/green] Opened focus [cyan]{focus_dir.name}[/cyan]")
     console.print(f"  Edit: [dim]{focus_dir}/FOCUS.md[/dim]")
+
+
+@main.command()
+@click.argument("stage_name", type=click.Choice(["research", "plan", "execute"]))
+def seal(stage_name: str) -> None:
+    """Seal the given stage on the active focus: copy each peer's latest version to {peer}-FINAL.md."""
+    state = find_paircode()
+    if state is None or state.active_focus is None:
+        console.print(
+            "[red]No active focus.[/red] Run [cyan]paircode focus <name>[/cyan] first."
+        )
+        return
+    stage_dir = state.active_focus / stage_name
+    if not stage_dir.exists():
+        console.print(f"[red]Stage dir not found: {stage_dir}[/red]")
+        return
+    sealed = seal_stage(stage_dir)
+    if not sealed:
+        console.print(
+            f"[yellow]No versioned files found in {stage_dir} — nothing to seal.[/yellow]"
+        )
+        return
+    for s in sealed:
+        console.print(
+            f"  [green]✓[/green] {s.peer_id}: {s.source.name} → [cyan]{s.final.name}[/cyan]"
+        )
 
 
 @main.command()
