@@ -18,7 +18,7 @@ from rich.table import Table
 
 from paircode import __version__
 from paircode.detect import detect_all
-from paircode.drive import drive_research
+from paircode.drive import drive_full, drive_research, run_stage
 from paircode.handshake import propose_roster, proposed_as_yaml_dicts
 from paircode.installer import install_all, uninstall_all
 from paircode.state import (
@@ -229,9 +229,60 @@ def focus(name: str | None, prompt: str | None) -> None:
 
 @main.command()
 @click.argument("stage_name", type=click.Choice(["research", "plan", "execute"]))
-def stage(stage_name: str) -> None:
-    """Run one peer-review round at a stage (not yet implemented — step B)."""
-    console.print(f"[yellow]stage {stage_name}: not yet implemented (step B)[/yellow]")
+@click.option("--rounds", default=1, show_default=True, help="Rounds to run (round 1 = cold v1; 2+ = review+revise)")
+@click.option("--alpha-cli", default="claude", show_default=True)
+@click.option("--alpha-model", default=None)
+@click.option("--timeout", default=600, show_default=True)
+def stage(stage_name: str, rounds: int, alpha_cli: str, alpha_model: str | None, timeout: int) -> None:
+    """Run a peer-review stage on the active focus for N rounds."""
+    from paircode.state import find_paircode
+
+    state = find_paircode()
+    if state is None or state.active_focus is None:
+        console.print("[red]No active focus.[/red] Run [cyan]paircode focus <name>[/cyan] first.")
+        return
+    focus_dir = state.active_focus
+    focus_md = focus_dir / "FOCUS.md"
+    topic = focus_md.read_text(encoding="utf-8") if focus_md.exists() else focus_dir.name
+
+    console.print(
+        f"[bold]stage[/bold] {stage_name} × {rounds} rounds on [cyan]{focus_dir.name}[/cyan]"
+    )
+    results = run_stage(
+        topic=topic,
+        focus_dir=focus_dir,
+        stage=stage_name,  # type: ignore[arg-type]
+        rounds=rounds,
+        alpha_cli=alpha_cli,
+        alpha_model=alpha_model,
+        timeout_s=timeout,
+        state=state,
+    )
+    _render_stage_results(stage_name, results)
+
+
+def _render_stage_results(stage_name: str, results) -> None:
+    for sr in results:
+        console.print(f"\n[bold]round {sr.version}[/bold] ({stage_name})")
+        table = Table(show_header=True, header_style="bold")
+        table.add_column("kind")
+        table.add_column("peer")
+        table.add_column("cli")
+        table.add_column("ok")
+        table.add_column("duration")
+        if sr.peer_results:
+            for r in sr.peer_results:
+                status = "[green]✓[/green]" if r.ok else "[red]✗[/red]"
+                table.add_row("cold", r.peer_id, r.cli, status, f"{r.duration_s:.1f}s")
+        if sr.review_results:
+            for r in sr.review_results:
+                status = "[green]✓[/green]" if r.ok else "[red]✗[/red]"
+                table.add_row("review", r.peer_id, r.cli, status, f"{r.duration_s:.1f}s")
+        if sr.alpha_revision:
+            r = sr.alpha_revision
+            status = "[green]✓[/green]" if r.ok else "[red]✗[/red]"
+            table.add_row("revise", r.peer_id, r.cli, status, f"{r.duration_s:.1f}s")
+        console.print(table)
 
 
 @main.command()
@@ -244,46 +295,70 @@ def stage(stage_name: str) -> None:
 )
 @click.option("--alpha-model", default=None, help="Model string for alpha (CLI default if omitted)")
 @click.option("--timeout", default=600, show_default=True, help="Per-peer timeout in seconds")
-def drive(topic: str, alpha_cli: str, alpha_model: str | None, timeout: int) -> None:
-    """High-level loop: open a focus on <topic>, run research stage (v1 cold).
-
-    M3 runs ONE research round (alpha + all peers in parallel). M4 adds reviews,
-    v2+ rounds, plan stage, execute stage.
-    """
+@click.option(
+    "--research-rounds",
+    default=2,
+    show_default=True,
+    help="Rounds in research stage (1 = cold only, 2+ = with reviews)",
+)
+@click.option("--plan-rounds", default=2, show_default=True)
+@click.option("--execute-rounds", default=1, show_default=True)
+@click.option(
+    "--research-only",
+    is_flag=True,
+    help="Stop after research stage (for quick iteration / cost control)",
+)
+def drive(
+    topic: str,
+    alpha_cli: str,
+    alpha_model: str | None,
+    timeout: int,
+    research_rounds: int,
+    plan_rounds: int,
+    execute_rounds: int,
+    research_only: bool,
+) -> None:
+    """Full loop: open focus, run research → plan → execute with peer review."""
     console.print(f"[bold]paircode drive[/bold] topic=[cyan]{topic}[/cyan]")
     console.print(
         f"  alpha = {alpha_cli} ({alpha_model or 'default model'}), timeout = {timeout}s"
     )
-    console.print("  [dim]spawning alpha + peers in parallel (this can take minutes)...[/dim]")
-    result = drive_research(
+    if research_only:
+        console.print(
+            f"  [dim]research-only mode, rounds = {research_rounds}[/dim]"
+        )
+        stage_results = drive_research(
+            topic=topic,
+            alpha_cli=alpha_cli,
+            alpha_model=alpha_model,
+            timeout_s=timeout,
+            rounds=research_rounds,
+        )
+        _render_stage_results("research", stage_results)
+        console.print(
+            f"\n[bold]Research stage complete.[/bold] "
+            f"Files at [cyan].paircode/{stage_results[0].focus_dir.name}/research/[/cyan]"
+        )
+        return
+
+    console.print(
+        f"  [dim]research={research_rounds}r, plan={plan_rounds}r, "
+        f"execute={execute_rounds}r (this can take a while)[/dim]"
+    )
+    all_results = drive_full(
         topic=topic,
         alpha_cli=alpha_cli,
         alpha_model=alpha_model,
         timeout_s=timeout,
+        research_rounds=research_rounds,
+        plan_rounds=plan_rounds,
+        execute_rounds=execute_rounds,
     )
-    console.print(f"\n[bold]Research round complete.[/bold] Focus: [cyan]{result.focus_dir.name}[/cyan]")
-    rtable = Table(show_header=True, header_style="bold")
-    rtable.add_column("peer")
-    rtable.add_column("cli")
-    rtable.add_column("ok")
-    rtable.add_column("duration")
-    rtable.add_column("output")
-    for r in result.peer_results:
-        status = "[green]✓[/green]" if r.ok else "[red]✗[/red]"
-        rtable.add_row(
-            r.peer_id,
-            r.cli,
-            status,
-            f"{r.duration_s:.1f}s",
-            "[dim]see file[/dim]" if r.ok else f"[red]{r.stderr[:60]}[/red]",
-        )
-    console.print(rtable)
+    for stage_name, stage_results in all_results.items():
+        _render_stage_results(stage_name, stage_results)
+    first_focus = next(iter(all_results.values()))[0].focus_dir
     console.print(
-        f"\n[bold]Files written:[/bold] [cyan]{result.focus_dir / 'research'}[/cyan]"
-    )
-    console.print(
-        f"  {result.successes} successful, {result.failures} failed. "
-        f"Review at .paircode/{result.focus_dir.name}/research/*.md"
+        f"\n[bold green]Drive complete.[/bold green] Focus: [cyan]{first_focus.name}[/cyan]"
     )
 
 

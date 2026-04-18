@@ -28,46 +28,103 @@ def test_propose_roster_returns_installed_peers_only(monkeypatch):
     assert not any("gemini" in x for x in ids)
 
 
-def test_drive_research_creates_focus_and_writes_outputs(tmp_path: Path, monkeypatch):
-    monkeypatch.chdir(tmp_path)
-    state = init_paircode(tmp_path)
-    # Configure one fake peer
-    write_peers(state, [{"id": "peer-a-fake", "cli": "fake-cli", "mode": "full-fork"}])
-
-    fake_outputs = {}
+def _make_fake_runner(record):
+    from paircode.runner import PeerRunResult
 
     def fake_run_peer(peer_id, cli, prompt, output_path, model=None, timeout_s=600):
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        output_path.write_text(f"# {peer_id}\n\nfake research on topic", encoding="utf-8")
-        fake_outputs[peer_id] = output_path
-        from paircode.runner import PeerRunResult
-
+        output_path.write_text(
+            f"# {peer_id}\n\nfake output for stage {output_path.parent.name}",
+            encoding="utf-8",
+        )
+        record.append(peer_id)
         return PeerRunResult(
             peer_id=peer_id,
             cli=cli,
             ok=True,
-            stdout="fake research",
+            stdout=f"fake output {peer_id}",
             stderr="",
             duration_s=0.01,
             command=[cli, prompt],
         )
 
-    with patch("paircode.drive.run_peer", side_effect=fake_run_peer):
-        result = drive_research(
+    return fake_run_peer
+
+
+def test_drive_research_creates_focus_and_writes_outputs(tmp_path: Path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    state = init_paircode(tmp_path)
+    write_peers(state, [{"id": "peer-a-fake", "cli": "fake-cli", "mode": "full-fork"}])
+
+    record: list[str] = []
+    with patch("paircode.drive.run_peer", side_effect=_make_fake_runner(record)):
+        results = drive_research(
             topic="test topic for research",
             alpha_cli="fake-claude",
             timeout_s=5,
+            rounds=1,
         )
 
-    # Focus was created
-    assert result.focus_dir.exists()
-    assert result.focus_dir.name.startswith("focus-01-")
-    # Both alpha and the fake peer ran
-    assert result.successes == 2
-    assert result.failures == 0
-    # Files landed
-    assert (result.focus_dir / "research" / "alpha-v1.md").exists()
-    assert (result.focus_dir / "research" / "peer-a-fake-v1.md").exists()
+    assert len(results) == 1
+    sr = results[0]
+    assert sr.focus_dir.exists()
+    assert sr.version == 1
+    assert sr.successes == 2  # alpha + peer-a-fake
+    assert (sr.focus_dir / "research" / "alpha-v1.md").exists()
+    assert (sr.focus_dir / "research" / "peer-a-fake-v1.md").exists()
+
+
+def test_drive_research_multiple_rounds_does_reviews_and_revises(tmp_path: Path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    state = init_paircode(tmp_path)
+    write_peers(state, [{"id": "peer-a-fake", "cli": "fake-cli", "mode": "full-fork"}])
+
+    record: list[str] = []
+    with patch("paircode.drive.run_peer", side_effect=_make_fake_runner(record)):
+        results = drive_research(
+            topic="multi-round test",
+            alpha_cli="fake-claude",
+            timeout_s=5,
+            rounds=2,
+        )
+
+    assert len(results) == 2
+    r1, r2 = results
+    # Round 1: cold alpha + peer
+    assert r1.version == 1
+    assert len(r1.peer_results) == 2
+    # Round 2: reviews + alpha revision
+    assert r2.version == 2
+    assert len(r2.review_results) == 1  # one peer => one review
+    assert r2.alpha_revision is not None
+    focus_dir = r1.focus_dir
+    assert (focus_dir / "research" / "alpha-v2.md").exists()
+    assert (focus_dir / "research" / "reviews" / "round-01-peer-a-fake-critiques-alpha.md").exists()
+
+
+def test_drive_full_runs_all_three_stages(tmp_path: Path, monkeypatch):
+    from paircode.drive import drive_full
+
+    monkeypatch.chdir(tmp_path)
+    state = init_paircode(tmp_path)
+    write_peers(state, [{"id": "peer-a-fake", "cli": "fake-cli", "mode": "full-fork"}])
+
+    record: list[str] = []
+    with patch("paircode.drive.run_peer", side_effect=_make_fake_runner(record)):
+        out = drive_full(
+            topic="full loop test",
+            alpha_cli="fake-claude",
+            timeout_s=5,
+            research_rounds=1,
+            plan_rounds=1,
+            execute_rounds=1,
+        )
+
+    assert set(out.keys()) == {"research", "plan", "execute"}
+    focus_dir = out["research"][0].focus_dir
+    for stage in ("research", "plan", "execute"):
+        assert (focus_dir / stage / "alpha-v1.md").exists()
+        assert (focus_dir / stage / "peer-a-fake-v1.md").exists()
 
 
 def test_runner_writes_trace_header_even_on_failure(tmp_path: Path):
