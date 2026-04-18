@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "paircode"
-version = "0.0.1"
+version = "0.7.0"
 description = "Adversarial journey framework — orchestrate multiple LLM peers through research, plan, and execute stages with file-trace peer review."
 readme = "README.md"
 license = { text = "MIT" }

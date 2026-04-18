@@ -34,3 +34,4 @@ ENV/
 # Local test scratch
 /tmp/
 scratch/
+dist/
