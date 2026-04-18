@@ -1,15 +1,23 @@
-"""Invoke peer LLM CLIs as subprocesses, capture output to .md files.
+"""Invoke peer LLM CLIs via cliworker, capture output to .md files.
 
-This is the "spawn an LLM, write its answer to disk" primitive. Each CLI
-has different flags for non-interactive / prompt-mode; we normalize them
-here so upstream code just says "ask <peer> this prompt, save to <path>".
+Thin wrapper over `cliworker.run()`. Gives paircode:
+  * CLAUDE_FAST flags when fast=True (claude -p goes from 18s → 4s)
+  * Gemini MCP strip-and-restore during calls
+  * Skip-cache for broken engines (1h TTL)
+  * Subscription-mode-first by default (no API credits unless paid_ok=True)
+  * One place to fix CLI quirks instead of re-implementing them here
+
+Adds one paircode-specific thing cliworker doesn't: writing each peer's
+response to a .md file with a file-trace header (peer_id / cli / model /
+duration / ok). That's the orchestration log paircode needs.
 """
 from __future__ import annotations
 
-import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
+
+from cliworker import CLIResult, get_spec, run
 
 
 DEFAULT_TIMEOUT_SECONDS = 600  # 10 min per peer call — generous for cold research
@@ -17,6 +25,7 @@ DEFAULT_TIMEOUT_SECONDS = 600  # 10 min per peer call — generous for cold rese
 
 @dataclass(frozen=True)
 class PeerRunResult:
+    """paircode's peer-run result — wraps cliworker's CLIResult with a peer_id."""
     peer_id: str
     cli: str
     ok: bool
@@ -25,32 +34,17 @@ class PeerRunResult:
     duration_s: float
     command: list[str]
 
-
-def _cli_command(cli: str, prompt: str, model: Optional[str]) -> list[str]:
-    """Return the subprocess argv to invoke `cli` non-interactively with `prompt`."""
-    if cli == "claude":
-        # Claude Code: -p is non-interactive (print) mode
-        cmd = ["claude", "-p", prompt]
-        if model:
-            cmd.extend(["--model", model])
-        return cmd
-    if cli == "codex":
-        # Codex CLI: `codex exec` is non-interactive; --dangerously-bypass needed to
-        # write files / skip approvals when running headless.
-        cmd = ["codex", "exec", "--dangerously-bypass-approvals-and-sandbox", prompt]
-        if model:
-            cmd.extend(["--model", model])
-        return cmd
-    if cli == "gemini":
-        cmd = ["gemini", "-p", prompt]
-        if model:
-            cmd.extend(["--model", model])
-        return cmd
-    if cli == "ollama":
-        # Ollama needs a model name
-        return ["ollama", "run", model or "llama3.1", prompt]
-    # Unknown CLI — best-effort: pass prompt as last arg
-    return [cli, prompt]
+    @classmethod
+    def from_cli_result(cls, peer_id: str, r: CLIResult) -> "PeerRunResult":
+        return cls(
+            peer_id=peer_id,
+            cli=r.spec.cli,
+            ok=r.ok,
+            stdout=r.stdout,
+            stderr=r.stderr,
+            duration_s=r.duration_s,
+            command=list(r.argv),
+        )
 
 
 def run_peer(
@@ -60,55 +54,69 @@ def run_peer(
     output_path: Path,
     model: Optional[str] = None,
     timeout_s: int = DEFAULT_TIMEOUT_SECONDS,
+    fast: bool = False,
+    paid_ok: bool | list[str] | None = None,
 ) -> PeerRunResult:
     """Run one peer LLM against `prompt`, write its stdout to `output_path`.
 
-    Returns a PeerRunResult capturing success/failure + full stdout + stderr.
-    The output file is written regardless of success (empty or error-captured
-    text) so that every invocation leaves a file-trace on disk.
+    Delegates to `cliworker.run()` for the actual subprocess call. Adds the
+    paircode-specific file-trace header. Output file is written regardless
+    of success — every invocation leaves a trace on disk.
+
+    Args:
+        peer_id: paircode-level identifier (e.g. "peer-a-codex"). Not known to cliworker.
+        cli: one of "claude", "codex", "gemini", "ollama".
+        prompt: the instruction to send.
+        output_path: where to write the file-trace .md.
+        model: optional model override (e.g. "sonnet", "gemma3:4b").
+        timeout_s: per-call timeout.
+        fast: True = apply cliworker's speed flags (CLAUDE_FAST, gemini MCP strip).
+              False (default) = full mode — all MCPs/tools loaded, matches how
+              the user's normal `claude -p` session behaves.
+        paid_ok: None (default) = free/subscription only, never burn API credits.
+                 True = allow paid API fallback for this CLI.
+                 list[str] = allow paid only for those CLI names (typically just `cli`).
     """
-    import time
+    # Build spec with optional model override
+    spec = get_spec(cli, model=model) if model else get_spec(cli)
 
-    cmd = _cli_command(cli, prompt, model)
-    start = time.monotonic()
-    try:
-        proc = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=timeout_s,
-            check=False,
+    # cliworker's run() needs None (not False) to "respect spec default" for fast.
+    results = run(
+        prompt, spec,
+        fast=True if fast else None,
+        paid_ok=paid_ok,
+        timeout_s=timeout_s,
+    )
+
+    # cliworker.run() returns empty list only if no CLIs passed AND no default chain.
+    # We passed an explicit spec, so this should always have at least one result.
+    if results:
+        cli_result = results[-1]
+    else:
+        # Defensive fallback — construct a failure result
+        cli_result = CLIResult(
+            spec=spec, ok=False, stdout="",
+            stderr=f"no result from cliworker for {cli}",
+            duration_s=0.0, returncode=None, argv=[], skipped_reason=None,
         )
-        duration = time.monotonic() - start
-        ok = proc.returncode == 0
-        stdout, stderr = proc.stdout, proc.stderr
-    except FileNotFoundError:
-        duration = time.monotonic() - start
-        ok = False
-        stdout = ""
-        stderr = f"{cli} binary not found on PATH"
-    except subprocess.TimeoutExpired:
-        duration = time.monotonic() - start
-        ok = False
-        stdout = ""
-        stderr = f"{cli} timed out after {timeout_s}s"
 
+    # Write the paircode file-trace
     output_path.parent.mkdir(parents=True, exist_ok=True)
     header = (
         f"<!-- peer_id: {peer_id} -->\n"
         f"<!-- cli: {cli} -->\n"
         f"<!-- model: {model or '(default)'} -->\n"
-        f"<!-- duration_s: {duration:.1f} -->\n"
-        f"<!-- ok: {ok} -->\n\n"
+        f"<!-- duration_s: {cli_result.duration_s:.1f} -->\n"
+        f"<!-- ok: {cli_result.ok} -->\n\n"
     )
-    body = stdout if ok else f"# Peer run FAILED\n\n```\n{stderr}\n```\n\n{stdout}"
+    if cli_result.ok:
+        body = cli_result.stdout
+    else:
+        body = (
+            f"# Peer run FAILED\n\n"
+            f"```\n{cli_result.stderr}\n```\n\n"
+            f"{cli_result.stdout}"
+        )
     output_path.write_text(header + body, encoding="utf-8")
-    return PeerRunResult(
-        peer_id=peer_id,
-        cli=cli,
-        ok=ok,
-        stdout=stdout,
-        stderr=stderr,
-        duration_s=duration,
-        command=cmd,
-    )
+
+    return PeerRunResult.from_cli_result(peer_id, cli_result)

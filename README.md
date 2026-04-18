@@ -8,10 +8,20 @@
 
 ```bash
 pipx install paircode       # or: pip install --user paircode
-paircode install            # registers /paircode in Claude / Codex / Gemini
+paircode install            # registers /paircode in Claude Code (global slash command)
 ```
 
-Then open Claude Code, Codex, or Gemini and you'll see `/paircode` available globally.
+After install, open Claude Code in any project and `/paircode` is available.
+
+> **Note**: codex and gemini don't have a slash-command registration system
+> we can target, so `paircode install` is a no-op for them. From codex or
+> gemini, invoke paircode from your shell: `paircode status`, `paircode drive "..."`
+> etc. (or wrapped: `codex exec 'paircode status'`).
+
+As of v0.8.0, paircode delegates all CLI invocation to [`cliworker`](https://pypi.org/project/cliworker/) — one place to own
+the speed flags, MCP strip tricks, skip-cache, and subscription-first fallback
+logic. paircode adds the peer-review orchestration on top (file-traces, stages,
+gates, journey).
 
 ## Use it — three entry points
 

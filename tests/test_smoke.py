@@ -76,9 +76,56 @@ def test_install_writes_to_tmp_claude(tmp_path, monkeypatch):
 
     results = inst.install_all()
     actions = {r.cli_name: r.action for r in results}
+    # claude gets a real install (writes slash command file)
     assert actions["claude"] == "installed"
-    # Verify file landed
+    # codex and gemini are intentional no-ops as of v0.8 — we stopped writing
+    # broken files to ~/.codex/rules/. Both should report "noop" not "installed".
+    assert actions["codex"] == "noop", (
+        f"codex should be noop (not installed), got {actions['codex']!r}"
+    )
+    assert actions["gemini"] == "noop", (
+        f"gemini should be noop (not installed), got {actions['gemini']!r}"
+    )
+    # Verify claude slash command actually landed on disk
     claude_cmd = fake_home / ".claude" / "commands" / "paircode.md"
     assert claude_cmd.exists()
     content = claude_cmd.read_text()
     assert "paircode" in content
+    # And verify we do NOT write a broken codex rules file
+    codex_rules = fake_home / ".codex" / "rules" / "paircode.rules"
+    assert not codex_rules.exists(), (
+        f"paircode should not write {codex_rules} — that file breaks codex's rule loader"
+    )
+
+
+def test_install_cleans_legacy_codex_rules_file(tmp_path, monkeypatch):
+    """Users who installed paircode 0.1–0.7 have a broken ~/.codex/rules/paircode.rules.
+    Running install again (or any time) must clean it up."""
+    fake_home = tmp_path / "home"
+    fake_home.mkdir()
+    monkeypatch.setenv("HOME", str(fake_home))
+    import importlib
+
+    import paircode.detect as d
+    import paircode.installer as inst
+
+    importlib.reload(d)
+    importlib.reload(inst)
+
+    # Seed the legacy broken file
+    legacy = fake_home / ".codex" / "rules" / "paircode.rules"
+    legacy.parent.mkdir(parents=True)
+    legacy.write_text("# old broken markdown-in-starlark\n")
+    assert legacy.exists()
+
+    def fake_which(binary):
+        return f"/fake/bin/{binary}"
+
+    monkeypatch.setattr("shutil.which", fake_which)
+    inst.install_all()
+
+    # Legacy file should be gone after install_all
+    assert not legacy.exists(), (
+        "install_all must remove the legacy ~/.codex/rules/paircode.rules "
+        "(it's Starlark-parsed and our markdown broke codex)"
+    )

@@ -1,15 +1,21 @@
-"""Install paircode's slash command / rules into the detected LLM CLIs.
+"""Install paircode's slash command into detected LLM CLIs.
 
 Strategy per CLI:
-  - Claude Code: write `~/.claude/commands/paircode.md` (user-level global slash command).
-  - Codex: write `~/.codex/prompts/paircode.md` if codex supports it, otherwise write
-    a rules snippet at `~/.codex/rules/paircode.rules` that gets picked up as context.
-  - Gemini: no global slash-command primitive; install as a skill via `gemini skills install`
-    or write an extension manifest. Fallback: print instructions to invoke `paircode` from shell.
+  - Claude Code: writes ~/.claude/commands/paircode.md as a real slash command.
+    When the user types `/paircode` in any Claude Code session, this file
+    tells Claude to invoke the paircode CLI via bash.
+  - Codex: no file written. Codex doesn't have a user-facing slash-command
+    system. Users invoke `paircode` from their shell or `codex exec paircode ...`.
+    Previous versions wrote `~/.codex/rules/paircode.rules` — that file is
+    Starlark-formatted and our markdown content broke codex's rule loader.
+    `uninstall` still cleans up that legacy path.
+  - Gemini: no file written. Same reasoning — gemini's custom-command story
+    is `gemini skills install` with a git-repo source, not a markdown drop.
+    That's a v0.9+ stretch goal. For now, gemini users invoke paircode from
+    the shell.
 """
 from __future__ import annotations
 
-import shutil
 from dataclasses import dataclass
 from importlib import resources
 from pathlib import Path
@@ -20,7 +26,7 @@ from paircode.detect import detect_all, CliInfo
 @dataclass(frozen=True)
 class InstallResult:
     cli_name: str
-    action: str  # "installed", "skipped", "failed"
+    action: str  # "installed", "skipped", "failed", "noop"
     path: Path | None
     message: str
 
@@ -29,7 +35,12 @@ def _read_template(name: str) -> str:
     return resources.files("paircode.templates").joinpath(name).read_text(encoding="utf-8")
 
 
+# ---------------------------------------------------------------------------
+# Per-CLI installers
+# ---------------------------------------------------------------------------
+
 def install_claude(info: CliInfo) -> InstallResult:
+    """Write ~/.claude/commands/paircode.md — a real Claude Code slash command."""
     if not info.installed:
         return InstallResult(
             cli_name="claude",
@@ -51,6 +62,7 @@ def install_claude(info: CliInfo) -> InstallResult:
 
 
 def install_codex(info: CliInfo) -> InstallResult:
+    """Codex has no user-facing slash-command system. No-op, print guidance."""
     if not info.installed:
         return InstallResult(
             cli_name="codex",
@@ -58,25 +70,21 @@ def install_codex(info: CliInfo) -> InstallResult:
             path=None,
             message=f"codex CLI not on PATH. {info.install_hint}",
         )
-    # Codex doesn't have a user-facing slash-command dir; we write a rules snippet
-    # that codex reads as context in every session. This is graceful fallback.
-    rules_dir = info.config_dir / "rules"
-    rules_dir.mkdir(parents=True, exist_ok=True)
-    target = rules_dir / "paircode.rules"
-    template = _read_template("codex_rules.md")
-    target.write_text(template, encoding="utf-8")
     return InstallResult(
         cli_name="codex",
-        action="installed",
-        path=target,
+        action="noop",
+        path=None,
         message=(
-            f"Wrote paircode rules to {target}. Codex will see paircode as an "
-            "available tool in its context. Invoke via `codex exec 'paircode ...'`."
+            "codex has no slash-command system — nothing to install. "
+            "Invoke paircode from your shell (`paircode status`) or via "
+            "`codex exec 'paircode status'` from inside a codex session."
         ),
     )
 
 
 def install_gemini(info: CliInfo) -> InstallResult:
+    """Gemini's custom-command story uses `gemini skills install` with a git
+    repo. That's not an easy installer drop — deferred to v0.9+. No-op."""
     if not info.installed:
         return InstallResult(
             cli_name="gemini",
@@ -84,27 +92,25 @@ def install_gemini(info: CliInfo) -> InstallResult:
             path=None,
             message=f"gemini CLI not on PATH. {info.install_hint}",
         )
-    # Gemini CLI exposes `gemini skills install <source>`, but we don't want to
-    # depend on the gemini binary being on PATH at install time. Instead, we
-    # document the invocation pattern: gemini users call paircode from shell or
-    # via a skill installed manually. Write a reminder file at ~/.gemini/paircode.md.
-    info.config_dir.mkdir(parents=True, exist_ok=True)
-    target = info.config_dir / "paircode.md"
-    template = _read_template("codex_rules.md")  # same "you have paircode CLI" content
-    target.write_text(template, encoding="utf-8")
     return InstallResult(
         cli_name="gemini",
-        action="installed",
-        path=target,
+        action="noop",
+        path=None,
         message=(
-            f"Wrote paircode reference to {target}. Gemini users: invoke via "
-            "`gemini -p 'run paircode status'` or from shell directly. Full "
-            "skill-registration support lands in a later release."
+            "gemini uses `gemini skills install` for custom commands — "
+            "proper skill-registration lands in v0.9+. For now, invoke "
+            "paircode from your shell or via `gemini -p 'run paircode status'`."
         ),
     )
 
 
+# ---------------------------------------------------------------------------
+# Public entry points
+# ---------------------------------------------------------------------------
+
 def install_all() -> list[InstallResult]:
+    """Run every CLI's installer. Also cleans up legacy broken files first."""
+    _clean_legacy_broken_files()
     detected = detect_all()
     installers = {
         "claude": install_claude,
@@ -121,41 +127,57 @@ def install_all() -> list[InstallResult]:
         except Exception as exc:  # pragma: no cover — defensive
             results.append(
                 InstallResult(
-                    cli_name=name,
-                    action="failed",
-                    path=None,
+                    cli_name=name, action="failed", path=None,
                     message=f"{type(exc).__name__}: {exc}",
                 )
             )
     return results
 
 
+def _clean_legacy_broken_files() -> None:
+    """Remove files that previous versions of paircode installed and which we
+    now know to be broken or misplaced. Silent; best-effort."""
+    for legacy_path in (
+        # v0.1–v0.7 wrote markdown to codex's Starlark rules dir, which broke
+        # codex's rule loader. Always clean this up on any install.
+        Path.home() / ".codex" / "rules" / "paircode.rules",
+        # v0.1–v0.7 also dropped a reference file at ~/.gemini/paircode.md.
+        # Harmless but no longer created; remove to keep the dir clean.
+        Path.home() / ".gemini" / "paircode.md",
+    ):
+        try:
+            if legacy_path.exists():
+                legacy_path.unlink()
+        except OSError:
+            pass
+
+
 def uninstall_all() -> list[InstallResult]:
-    """Remove paircode entries from every known CLI config dir (idempotent)."""
+    """Remove paircode entries from every CLI config dir (idempotent).
+    Also cleans up legacy broken paths from prior paircode versions."""
     results: list[InstallResult] = []
-    paths = [
+    paths: list[tuple[Path, str]] = [
         (Path.home() / ".claude" / "commands" / "paircode.md", "claude"),
+        # Legacy paths — older paircode put these here, we still clean them up
         (Path.home() / ".codex" / "rules" / "paircode.rules", "codex"),
         (Path.home() / ".gemini" / "paircode.md", "gemini"),
     ]
     for path, cli_name in paths:
         if path.exists():
-            path.unlink()
-            results.append(
-                InstallResult(
-                    cli_name=cli_name,
-                    action="installed",  # we removed it
-                    path=path,
-                    message=f"Removed {path}",
-                )
-            )
+            try:
+                path.unlink()
+                results.append(InstallResult(
+                    cli_name=cli_name, action="installed",  # "removed"
+                    path=path, message=f"Removed {path}",
+                ))
+            except OSError as exc:
+                results.append(InstallResult(
+                    cli_name=cli_name, action="failed",
+                    path=path, message=f"Failed to remove {path}: {exc}",
+                ))
         else:
-            results.append(
-                InstallResult(
-                    cli_name=cli_name,
-                    action="skipped",
-                    path=path,
-                    message=f"Nothing to remove at {path}",
-                )
-            )
+            results.append(InstallResult(
+                cli_name=cli_name, action="skipped",
+                path=path, message=f"Nothing to remove at {path}",
+            ))
     return results

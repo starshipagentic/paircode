@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "paircode"
-version = "0.7.1"
+version = "0.8.0"
 description = "Adversarial journey framework — orchestrate multiple LLM peers through research, plan, and execute stages with file-trace peer review."
 readme = "README.md"
 license = { text = "MIT" }
@@ -39,12 +39,13 @@ dependencies = [
     "click>=8.1",
     "pyyaml>=6.0",
     "rich>=13.0",
+    "cliworker>=0.7.1",
 ]
 
 [project.urls]
-Homepage = "https://github.com/tsomerville2/paircode"
-Repository = "https://github.com/tsomerville2/paircode"
-Issues = "https://github.com/tsomerville2/paircode/issues"
+Homepage = "https://github.com/starshipagentic/paircode"
+Repository = "https://github.com/starshipagentic/paircode"
+Issues = "https://github.com/starshipagentic/paircode/issues"
 
 [project.scripts]
 paircode = "paircode.cli:main"
