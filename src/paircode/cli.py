@@ -18,12 +18,15 @@ from rich.table import Table
 
 from paircode import __version__
 from paircode.detect import detect_all
+from paircode.drive import drive_research
+from paircode.handshake import propose_roster, proposed_as_yaml_dicts
 from paircode.installer import install_all, uninstall_all
 from paircode.state import (
     find_paircode,
     init_paircode,
     open_focus,
     read_peers,
+    write_peers,
 )
 
 
@@ -84,19 +87,58 @@ def uninstall() -> None:
 
 
 @main.command()
-def handshake() -> None:
-    """List detected LLM CLIs without installing anything."""
+@click.option("--write", is_flag=True, help="Write proposed roster to .paircode/peers.yaml")
+def handshake(write: bool) -> None:
+    """List detected LLM CLIs and propose a peer roster.
+
+    Without --write, just shows what was detected and what roster would be proposed.
+    With --write, saves the proposed roster to .paircode/peers.yaml (requires init first).
+    """
     detected = detect_all()
-    table = Table(show_header=True, header_style="bold")
-    table.add_column("CLI")
-    table.add_column("Installed")
-    table.add_column("Binary")
-    table.add_column("Config dir")
+    dtable = Table(title="Detected CLIs", show_header=True, header_style="bold")
+    dtable.add_column("CLI")
+    dtable.add_column("Installed")
+    dtable.add_column("Binary")
     for name, info in detected.items():
         status = "[green]yes[/green]" if info.installed else "[red]no[/red]"
         binary = str(info.binary_path) if info.binary_path else "[dim]—[/dim]"
-        table.add_row(name, status, binary, str(info.config_dir))
-    console.print(table)
+        dtable.add_row(name, status, binary)
+    console.print(dtable)
+
+    proposed = propose_roster()
+    if not proposed:
+        console.print(
+            "\n[yellow]No peers detected (only alpha is available). Install "
+            "codex/gemini/ollama to add peer voices.[/yellow]"
+        )
+        return
+
+    ptable = Table(title="Proposed peer roster", show_header=True, header_style="bold")
+    ptable.add_column("id")
+    ptable.add_column("cli")
+    ptable.add_column("mode")
+    ptable.add_column("priority")
+    ptable.add_column("notes")
+    for p in proposed:
+        ptable.add_row(p.id, p.cli, p.mode, p.priority, p.notes)
+    console.print(ptable)
+
+    if write:
+        state = find_paircode()
+        if state is None:
+            console.print(
+                "[red]No .paircode/ found.[/red] Run [cyan]paircode init[/cyan] first, then rerun."
+            )
+            return
+        write_peers(state, proposed_as_yaml_dicts(proposed))
+        console.print(
+            f"\n[green]✓[/green] Wrote roster to [cyan]{state.peers_path}[/cyan]"
+        )
+    else:
+        console.print(
+            "\n[dim]Run `paircode handshake --write` to save this roster to "
+            ".paircode/peers.yaml[/dim]"
+        )
 
 
 @main.command()
@@ -194,9 +236,55 @@ def stage(stage_name: str) -> None:
 
 @main.command()
 @click.argument("topic")
-def drive(topic: str) -> None:
-    """High-level loop: open a focus on <topic>, run research → plan → execute."""
-    console.print(f"[yellow]drive {topic!r}: not yet implemented (step B/M3)[/yellow]")
+@click.option(
+    "--alpha-cli",
+    default="claude",
+    show_default=True,
+    help="Which LLM CLI acts as alpha (the primary developer)",
+)
+@click.option("--alpha-model", default=None, help="Model string for alpha (CLI default if omitted)")
+@click.option("--timeout", default=600, show_default=True, help="Per-peer timeout in seconds")
+def drive(topic: str, alpha_cli: str, alpha_model: str | None, timeout: int) -> None:
+    """High-level loop: open a focus on <topic>, run research stage (v1 cold).
+
+    M3 runs ONE research round (alpha + all peers in parallel). M4 adds reviews,
+    v2+ rounds, plan stage, execute stage.
+    """
+    console.print(f"[bold]paircode drive[/bold] topic=[cyan]{topic}[/cyan]")
+    console.print(
+        f"  alpha = {alpha_cli} ({alpha_model or 'default model'}), timeout = {timeout}s"
+    )
+    console.print("  [dim]spawning alpha + peers in parallel (this can take minutes)...[/dim]")
+    result = drive_research(
+        topic=topic,
+        alpha_cli=alpha_cli,
+        alpha_model=alpha_model,
+        timeout_s=timeout,
+    )
+    console.print(f"\n[bold]Research round complete.[/bold] Focus: [cyan]{result.focus_dir.name}[/cyan]")
+    rtable = Table(show_header=True, header_style="bold")
+    rtable.add_column("peer")
+    rtable.add_column("cli")
+    rtable.add_column("ok")
+    rtable.add_column("duration")
+    rtable.add_column("output")
+    for r in result.peer_results:
+        status = "[green]✓[/green]" if r.ok else "[red]✗[/red]"
+        rtable.add_row(
+            r.peer_id,
+            r.cli,
+            status,
+            f"{r.duration_s:.1f}s",
+            "[dim]see file[/dim]" if r.ok else f"[red]{r.stderr[:60]}[/red]",
+        )
+    console.print(rtable)
+    console.print(
+        f"\n[bold]Files written:[/bold] [cyan]{result.focus_dir / 'research'}[/cyan]"
+    )
+    console.print(
+        f"  {result.successes} successful, {result.failures} failed. "
+        f"Review at .paircode/{result.focus_dir.name}/research/*.md"
+    )
 
 
 if __name__ == "__main__":
