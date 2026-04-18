@@ -102,11 +102,11 @@ def handshake(write: bool) -> None:
     dtable = Table(title="Detected CLIs", show_header=True, header_style="bold")
     dtable.add_column("CLI")
     dtable.add_column("Installed")
-    dtable.add_column("Binary")
+    dtable.add_column("Binary / Install hint")
     for name, info in detected.items():
         status = "[green]yes[/green]" if info.installed else "[red]no[/red]"
-        binary = str(info.binary_path) if info.binary_path else "[dim]—[/dim]"
-        dtable.add_row(name, status, binary)
+        right = str(info.binary_path) if info.binary_path else f"[dim]{info.install_hint}[/dim]"
+        dtable.add_row(name, status, right)
     console.print(dtable)
 
     proposed = propose_roster()

@@ -1,67 +1,119 @@
 # paircode
 
-**Adversarial journey framework for LLM peer review.** Orchestrate one "alpha" codebase plus N peer LLMs through research → plan → execute stages, with file-trace peer review at every step. Born from 31 iterations of dual-LLM silent-agreement hunting on a real ML project.
+**Multi-LLM peer review for your code, with file-traces on disk.** One primary LLM (alpha) + any number of peer LLMs (Codex, Gemini, Ollama, …) running independent research, plans, and code, with structured cross-review rounds stored entirely as Markdown on disk.
 
-> Status: **step-A scaffold, v0.0.1 pre-alpha.** The architecture and terminology are locked; the implementation lands in step B. See `diary/001-step-a-architecture.md` for the full design rationale.
+> Born from 31 iterations of dual-LLM silent-agreement hunting on a real ML project. See `diary/001-step-a-architecture.md` for the full design rationale.
 
-## What it's for
+## Install
 
-You're building software. You have one primary LLM (Claude, usually) writing code with you. That's alpha. You also have access to one or more other LLMs — Codex, Gemini, Ollama, whatever — that you'd like to use as peer reviewers, cold-fork implementers, or opinion-only second voices.
+```bash
+pipx install paircode       # or: pip install --user paircode
+paircode install            # registers /paircode in Claude / Codex / Gemini
+```
 
-paircode orchestrates all of that as structured file-traces on disk:
+Then open Claude Code, Codex, or Gemini and you'll see `/paircode` available globally.
+
+## Use it — three entry points
+
+### 1. From Claude Code (or any supported LLM) as a slash command
+
+Inside a Claude Code session:
 
 ```
-your-project/                       ← alpha's code (your actual codebase)
-  src/, tests/, README.md, ...
-  .paircode/                        ← hidden orchestration folder
-    JOURNEY.md                      ← fleet log
-    peers.yaml                      ← roster: who's on the team
+/paircode drive "build a KISS PHQ-9 depression risk engine"
+```
+
+Claude relays that to the CLI. paircode opens a focus, runs research → plan → execute with peer-reviewed rounds, writes everything to `.paircode/` as Markdown.
+
+### 2. From the shell directly
+
+```bash
+paircode init                                   # bootstrap .paircode/ in cwd
+paircode handshake --write                      # detect CLIs + write peer roster
+paircode drive "refactor the auth middleware"   # full loop
+paircode status                                 # see where you are
+```
+
+### 3. Piece by piece
+
+```bash
+paircode focus "try GitHub Actions migration"
+paircode stage research --rounds 2              # cold v1 + one review/revise round
+paircode seal research                          # mark research FINAL
+paircode stage plan --rounds 3
+paircode seal plan
+paircode stage execute
+paircode seal execute
+```
+
+## What ends up on disk
+
+```
+your-project/
+  .paircode/
+    JOURNEY.md                    # fleet log (auto-updated)
+    peers.yaml                    # who's on the team
     peers/
-      peer-a-codex/                 ← peer's full-fork code + profile
-      peer-b-gemini/                ← opinion-only peer's folder
-    focus-01-ml-engine/
-      FOCUS.md                      ← what this focus is about
-      research/                     ← versioned .md per peer + FINAL-per-peer
-      plan/                         ← same pattern
-      execute/                      ← iteration logs + FINAL summary per peer
-    focus-02-expand-features/
+      peer-a-codex/               # peer's profile (and code if full-fork mode)
+    focus-01-<slug>/
+      FOCUS.md                    # this focus's goal, roster override, gate config
+      research/
+        alpha-v1.md ... alpha-vN.md
+        peer-a-codex-v1.md ...
+        reviews/round-01-peer-a-codex-critiques-alpha.md
+        alpha-FINAL.md            # sealed exit artifact
+        peer-a-codex-FINAL.md
+      plan/
+        (same shape)
+      execute/
+        (same shape)
+    focus-02-<slug>/
       ...
 ```
 
-Every peer writes every thought to disk, in text files, at rest. That's how heterogeneous LLM tools communicate reliably across vendors, sessions, and days.
-
-## The three layers
-
-```
-Journey  →  Focus  →  Stage
-captain     per-goal   research | plan | execute
-```
-
-- **Journey** — the captain (you) steers through focuses over time: "ML engine" → "claims-data expansion" → "demo website" → "mobile app."
-- **Focus** — a single goal worth a research/plan/execute cycle.
-- **Stage** — one instance of the peer-review engine: all peers produce cold drafts, cross-review in N rounds, converge, emit FINAL artifacts.
+Every LLM's every thought lands as a Markdown file. That's how heterogeneous LLM tools communicate reliably across vendors, sessions, and days.
 
 ## Three peer modes
 
 | Mode | What the peer does | When to use |
 |---|---|---|
-| **full-fork** | Writes its own cold codebase, evolves independently, has opinions grounded in its own implementation | Silent-agreement hunting, safety-critical code, when you can afford it |
-| **pair-code** | Contributes directly to alpha's codebase via patches / reviews / suggestions | Frontend work, features, regular development |
-| **opinion-only** | Reads alpha's work, writes review `.md` files, never touches code | Budget peers (free-tier Gemini), quick sanity checks |
+| **full-fork** | Writes its own cold codebase + markdown artifacts | Silent-agreement hunting, safety-critical code |
+| **pair-code** | Contributes directly to alpha's codebase via patches + reviews | Feature work, regular dev |
+| **opinion-only** | Reads alpha's work, writes reviews, never touches code | Budget peers, quick sanity checks |
 
-## Install (once step B lands)
+Configured per peer in `.paircode/peers.yaml`.
 
-```bash
-pipx install paircode
-paircode handshake        # detect installed LLM CLIs, propose roster
-paircode install-claude   # register as /paircode slash command
-paircode install-codex    # register with Codex CLI for peer invocation
+## Model compatibility
+
+| CLI | Slash command | Subprocess driver | Status |
+|---|---|---|---|
+| Claude Code (`claude`) | ✓ `/paircode` via `~/.claude/commands/paircode.md` | ✓ `claude -p <prompt>` | stable |
+| Codex (`codex`) | ✓ context rule via `~/.codex/rules/paircode.rules` | ✓ `codex exec <prompt>` | stable |
+| Gemini CLI (`gemini`) | ✓ reference file at `~/.gemini/paircode.md` | ✓ `gemini -p <prompt>` | stable |
+| Ollama (`ollama`) | — (local models, no slash-cmd primitive) | ✓ `ollama run <model> <prompt>` | stable |
+| Aider / others | — | best-effort, PRs welcome | planned |
+
+## Commands
+
+```
+paircode --help           full command list
+paircode install          register /paircode in all detected LLM CLIs
+paircode uninstall        remove /paircode from LLM CLIs (idempotent)
+paircode handshake        detect CLIs, propose peer roster
+paircode handshake --write save roster to .paircode/peers.yaml
+paircode init             bootstrap .paircode/ in cwd
+paircode status           summarize current state
+paircode focus <name>     open a new focus
+paircode focus            list existing focuses
+paircode stage <name>     run one stage N rounds on active focus
+paircode seal <stage>     seal stage — copy each peer's latest vN to {peer}-FINAL.md
+paircode drive <topic>    full loop: research → plan → execute
 ```
 
-## Current status
+## Why this exists
 
-v0.0.1 is scaffold-only: `--help`, `--version`, and placeholder subcommands that print "not yet implemented." The design is complete; the implementation is next.
+See [`diary/001-step-a-architecture.md`](diary/001-step-a-architecture.md) for the full backstory. The short version: running two LLMs adversarially surfaces silent-agreement bug classes that neither engine alone can catch, because cross-engine agreement is not the same as correctness when both share the same blind spot.
 
 ## License
 
-MIT. See LICENSE.
+MIT. See [LICENSE](LICENSE).
