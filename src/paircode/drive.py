@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
 
+from paircode.gates import check_convergence, check_human_gate
 from paircode.runner import run_peer, PeerRunResult
 from paircode.state import (
     PaircodeState,
@@ -288,13 +289,24 @@ def run_stage(
     alpha_model: str | None = None,
     timeout_s: int = 600,
     state: PaircodeState | None = None,
+    check_gates: bool = True,
 ) -> list[StageResult]:
     """Run a stage for `rounds` rounds. Round 1 is cold v1. Rounds 2+ do
-    review-then-revise cycles. Returns one StageResult per round."""
+    review-then-revise cycles. Stops early on convergence or human-gate
+    sentinel unless check_gates=False. Returns one StageResult per round."""
     if state is None:
         state = _ensure_state()
     if rounds < 1:
         raise ValueError("rounds must be >= 1")
+
+    stage_dir = focus_dir / stage
+
+    # Check human gate BEFORE starting
+    if check_gates:
+        gate = check_human_gate(stage_dir)
+        if gate.stop:
+            # Still run cold v1 so we have something, then stop.
+            pass
 
     # Round 1: cold v1
     first = run_stage_cold(
@@ -303,8 +315,12 @@ def run_stage(
     )
     out = [first]
 
-    # Rounds 2..N: review + revise
+    # Rounds 2..N: review + revise, with gate checks between rounds
     for r in range(2, rounds + 1):
+        if check_gates:
+            hg = check_human_gate(stage_dir)
+            if hg.stop:
+                break
         prev_version = r - 1
         reviews = run_review_round(
             state, focus_dir, stage, topic, prev_version, timeout_s=timeout_s
@@ -320,6 +336,11 @@ def run_stage(
             review_results=reviews,
             alpha_revision=revision,
         ))
+        # Convergence check AFTER revision lands
+        if check_gates:
+            conv = check_convergence(stage_dir, r)
+            if conv.stop:
+                break
     return out
 
 
