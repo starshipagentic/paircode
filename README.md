@@ -8,15 +8,18 @@
 
 ```bash
 pipx install paircode       # or: pip install --user paircode
-paircode install            # registers /paircode in Claude Code (global slash command)
+paircode install            # registers /paircode in every detected LLM CLI
 ```
 
-After install, open Claude Code in any project and `/paircode` is available.
+After install, `/paircode` is available in all three:
 
-> **Note**: codex and gemini don't have a slash-command registration system
-> we can target, so `paircode install` is a no-op for them. From codex or
-> gemini, invoke paircode from your shell: `paircode status`, `paircode drive "..."`
-> etc. (or wrapped: `codex exec 'paircode status'`).
+| CLI | File installed |
+|---|---|
+| Claude Code | `~/.claude/commands/paircode.md` |
+| Codex CLI | `~/.codex/prompts/paircode.md` |
+| Gemini CLI | `~/.gemini/commands/paircode.toml` |
+
+Open any of them and type `/paircode`. In Gemini, you may need `/commands reload` the first time.
 
 As of v0.8.0, paircode delegates all CLI invocation to [`cliworker`](https://pypi.org/project/cliworker/) — one place to own
 the speed flags, MCP strip tricks, skip-cache, and subscription-first fallback

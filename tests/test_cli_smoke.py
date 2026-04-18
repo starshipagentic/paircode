@@ -194,9 +194,10 @@ def test_run_peer_fast_kwarg_passes_through(monkeypatch, tmp_path):
 # Installer: codex no-op + legacy cleanup
 # ---------------------------------------------------------------------------
 
-def test_installer_returns_noop_for_codex_not_installed_file(tmp_path, monkeypatch):
-    """Regression of the 'broken codex rules' bug: installer must never write
-    ~/.codex/rules/paircode.rules — that file breaks codex's rule loader."""
+def test_installer_writes_codex_prompt_never_broken_rules_file(tmp_path, monkeypatch):
+    """Regression of the 'broken codex rules' bug: installer must write to
+    ~/.codex/prompts/paircode.md (the correct path) and NEVER to
+    ~/.codex/rules/paircode.rules (that breaks codex's Starlark rule loader)."""
     fake_home = tmp_path / "home"
     fake_home.mkdir()
     monkeypatch.setenv("HOME", str(fake_home))
@@ -212,10 +213,37 @@ def test_installer_returns_noop_for_codex_not_installed_file(tmp_path, monkeypat
     results = inst.install_all()
 
     actions = {r.cli_name: r.action for r in results}
-    assert actions["codex"] == "noop"
-
-    # File must NOT exist
+    assert actions["codex"] == "installed"
+    assert (fake_home / ".codex" / "prompts" / "paircode.md").exists()
     assert not (fake_home / ".codex" / "rules" / "paircode.rules").exists()
+
+
+def test_installer_writes_gemini_toml_command(tmp_path, monkeypatch):
+    """Gemini slash commands are TOML (not markdown). Path must be
+    ~/.gemini/commands/paircode.toml with description + prompt fields."""
+    fake_home = tmp_path / "home"
+    fake_home.mkdir()
+    monkeypatch.setenv("HOME", str(fake_home))
+    import importlib
+
+    import paircode.detect as d
+    import paircode.installer as inst
+
+    importlib.reload(d)
+    importlib.reload(inst)
+
+    monkeypatch.setattr("shutil.which", lambda b: f"/fake/{b}")
+    results = inst.install_all()
+
+    actions = {r.cli_name: r.action for r in results}
+    assert actions["gemini"] == "installed"
+    target = fake_home / ".gemini" / "commands" / "paircode.toml"
+    assert target.exists()
+    content = target.read_text()
+    assert 'description' in content
+    assert 'prompt' in content
+    # TOML syntax sanity — triple-quoted prompt
+    assert '"""' in content
 
 
 # ---------------------------------------------------------------------------

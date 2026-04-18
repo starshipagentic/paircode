@@ -76,25 +76,34 @@ def test_install_writes_to_tmp_claude(tmp_path, monkeypatch):
 
     results = inst.install_all()
     actions = {r.cli_name: r.action for r in results}
-    # claude gets a real install (writes slash command file)
+    # v0.9: all three CLIs get a real slash command file drop.
     assert actions["claude"] == "installed"
-    # codex and gemini are intentional no-ops as of v0.8 — we stopped writing
-    # broken files to ~/.codex/rules/. Both should report "noop" not "installed".
-    assert actions["codex"] == "noop", (
-        f"codex should be noop (not installed), got {actions['codex']!r}"
-    )
-    assert actions["gemini"] == "noop", (
-        f"gemini should be noop (not installed), got {actions['gemini']!r}"
-    )
-    # Verify claude slash command actually landed on disk
+    assert actions["codex"] == "installed"
+    assert actions["gemini"] == "installed"
+
+    # Correct paths per CLI
     claude_cmd = fake_home / ".claude" / "commands" / "paircode.md"
     assert claude_cmd.exists()
-    content = claude_cmd.read_text()
-    assert "paircode" in content
-    # And verify we do NOT write a broken codex rules file
+    assert "paircode" in claude_cmd.read_text()
+
+    codex_cmd = fake_home / ".codex" / "prompts" / "paircode.md"
+    assert codex_cmd.exists(), (
+        f"v0.9 must write codex slash command to {codex_cmd}"
+    )
+    assert "paircode" in codex_cmd.read_text()
+
+    gemini_cmd = fake_home / ".gemini" / "commands" / "paircode.toml"
+    assert gemini_cmd.exists(), (
+        f"v0.9 must write gemini slash command to {gemini_cmd} (note: TOML, not markdown)"
+    )
+    gemini_content = gemini_cmd.read_text()
+    assert "description" in gemini_content
+    assert "prompt" in gemini_content
+
+    # And verify we still do NOT write the legacy broken codex rules file
     codex_rules = fake_home / ".codex" / "rules" / "paircode.rules"
     assert not codex_rules.exists(), (
-        f"paircode should not write {codex_rules} — that file breaks codex's rule loader"
+        f"paircode must never write {codex_rules} — that file breaks codex's rule loader"
     )
 
 

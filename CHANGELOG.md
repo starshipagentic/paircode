@@ -1,5 +1,53 @@
 # Changelog
 
+## 0.9.0 — real `/paircode` slash command in Codex and Gemini (file-drop)
+
+Research in April 2026 showed both Codex CLI (0.121.0+) and Gemini CLI
+(0.35.3+) now support user-level slash commands via file-drop. paircode
+v0.8.0 missed this and left codex/gemini as no-ops. v0.9.0 fixes that.
+
+### What `paircode install` writes now
+
+| CLI | Path | Format |
+|---|---|---|
+| Claude Code | `~/.claude/commands/paircode.md` | Markdown + YAML frontmatter (unchanged) |
+| Codex CLI | `~/.codex/prompts/paircode.md` | Markdown + YAML frontmatter (new) |
+| Gemini CLI | `~/.gemini/commands/paircode.toml` | **TOML** with `description` + `prompt` (new) |
+
+All three return `action="installed"` in `paircode install` output. All three
+show `/paircode` in the user's slash-command menu when they open the tool.
+
+### New templates
+
+- `src/paircode/templates/codex_slash_command.md` — codex-flavored frontmatter
+  with `argument-hint` field.
+- `src/paircode/templates/gemini_slash_command.toml` — TOML with `{{args}}`
+  placeholder substitution (Gemini's native syntax).
+
+### One caveat
+
+Codex flags `~/.codex/prompts/` as "deprecated" (they're steering toward
+marketplace plugins). Still the only file-drop path for user-typed slash
+commands today, and OpenAI hasn't removed it. If that changes, paircode
+migrates to `codex marketplace add` with a satellite `starshipagentic/paircode-codex`
+repo — flagged for v1.0.
+
+### Tests
+
+50 green. Key new coverage:
+- `test_install_writes_to_tmp_claude` updated: asserts all three CLIs write
+  correct files at correct paths.
+- `test_installer_writes_codex_prompt_never_broken_rules_file` — regression
+  against the v0.7 codex bug AND asserts the new correct prompts path.
+- `test_installer_writes_gemini_toml_command` — asserts TOML format, not
+  markdown, with `description` + `prompt` + triple-quoted blocks.
+
+### Legacy cleanup still runs
+
+`install_all()` continues to silently remove `~/.codex/rules/paircode.rules`
+(left by 0.1–0.7) and `~/.gemini/paircode.md` (left by 0.8). Users upgrading
+from any prior version get silent heal.
+
 ## 0.8.0 — delegate CLI invocation to cliworker, fix codex installer
 
 Major refactor: `paircode.runner` now delegates subprocess invocation to
