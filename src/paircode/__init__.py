@@ -2,4 +2,4 @@
 
 See README.md and diary/001-step-a-architecture.md for the full design.
 """
-__version__ = "0.7.0"
+__version__ = "0.7.1"
