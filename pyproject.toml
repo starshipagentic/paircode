@@ -1,0 +1,66 @@
+[build-system]
+requires = ["hatchling>=1.24"]
+build-backend = "hatchling.build"
+
+[project]
+name = "paircode"
+version = "0.0.1"
+description = "Adversarial journey framework — orchestrate multiple LLM peers through research, plan, and execute stages with file-trace peer review."
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.10"
+authors = [
+    { name = "Travis Somerville", email = "travis.somerville@gmail.com" },
+]
+keywords = [
+    "llm",
+    "agents",
+    "peer-review",
+    "claude",
+    "codex",
+    "gemini",
+    "ollama",
+    "multi-agent",
+    "orchestration",
+]
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development",
+]
+dependencies = [
+    "click>=8.1",
+    "pyyaml>=6.0",
+    "rich>=13.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/tsomerville2/paircode"
+Repository = "https://github.com/tsomerville2/paircode"
+Issues = "https://github.com/tsomerville2/paircode/issues"
+
+[project.scripts]
+paircode = "paircode.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/paircode"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "src/paircode",
+    "tests",
+    "diary",
+    "README.md",
+    "LICENSE",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
