@@ -54,12 +54,13 @@ def test_handshake_shows_table(tmp_path, monkeypatch):
         assert name in result.output
 
 
-def test_install_writes_to_tmp_claude(tmp_path, monkeypatch):
-    """Redirect ~/.claude to a tmp dir and verify install writes the slash command."""
+def test_install_writes_claude_and_invokes_native_register(tmp_path, monkeypatch):
+    """v0.10: claude is file-drop, codex + gemini use native-register via
+    cliworker.invoke(). Verify the right file lands AND the right subprocess
+    commands get called."""
     fake_home = tmp_path / "home"
     fake_home.mkdir()
     monkeypatch.setenv("HOME", str(fake_home))
-    # Re-import so Path.home() resolves to the new HOME
     import importlib
 
     import paircode.detect as d
@@ -68,43 +69,62 @@ def test_install_writes_to_tmp_claude(tmp_path, monkeypatch):
     importlib.reload(d)
     importlib.reload(inst)
 
-    # Force all three CLIs "installed" by monkeypatching shutil.which
     def fake_which(binary):
         return f"/fake/bin/{binary}"
 
     monkeypatch.setattr("shutil.which", fake_which)
 
+    # Capture invoke() calls — codex + gemini installs go through it
+    invoked: list[tuple] = []
+
+    def fake_invoke(cli, *args, **kwargs):
+        from cliworker.core import CLIResult
+        from cliworker.registry import CLISpec
+
+        invoked.append((cli, args))
+        # For idempotency check calls (gemini extensions list): return empty stdout
+        # so it's "not installed" and the real install runs.
+        if args and args[0] == "extensions" and "list" in args:
+            return CLIResult(
+                spec=CLISpec(cli=cli), ok=True, stdout="", stderr="",
+                duration_s=0.01, returncode=0, argv=[cli, *args], skipped_reason=None,
+            )
+        # For actual install calls, succeed.
+        return CLIResult(
+            spec=CLISpec(cli=cli), ok=True, stdout="installed", stderr="",
+            duration_s=0.1, returncode=0, argv=[cli, *args], skipped_reason=None,
+        )
+
+    monkeypatch.setattr("paircode.installer.invoke", fake_invoke)
+
     results = inst.install_all()
     actions = {r.cli_name: r.action for r in results}
-    # v0.9: all three CLIs get a real slash command file drop.
+
     assert actions["claude"] == "installed"
     assert actions["codex"] == "installed"
     assert actions["gemini"] == "installed"
 
-    # Correct paths per CLI
+    # Claude: file-drop landed on disk
     claude_cmd = fake_home / ".claude" / "commands" / "paircode.md"
     assert claude_cmd.exists()
     assert "paircode" in claude_cmd.read_text()
 
-    codex_cmd = fake_home / ".codex" / "prompts" / "paircode.md"
-    assert codex_cmd.exists(), (
-        f"v0.9 must write codex slash command to {codex_cmd}"
-    )
-    assert "paircode" in codex_cmd.read_text()
+    # Codex: the invoke() call ran `codex marketplace add starshipagentic/paircode-codex`
+    codex_calls = [c for c in invoked if c[0] == "codex"]
+    assert any(
+        c[1] == ("marketplace", "add", "starshipagentic/paircode-codex")
+        for c in codex_calls
+    ), f"Expected codex marketplace add call; got {codex_calls}"
 
-    gemini_cmd = fake_home / ".gemini" / "commands" / "paircode.toml"
-    assert gemini_cmd.exists(), (
-        f"v0.9 must write gemini slash command to {gemini_cmd} (note: TOML, not markdown)"
-    )
-    gemini_content = gemini_cmd.read_text()
-    assert "description" in gemini_content
-    assert "prompt" in gemini_content
+    # Gemini: the invoke() call ran `gemini extensions install <url> --consent`
+    gemini_install = [
+        c for c in invoked
+        if c[0] == "gemini" and "install" in c[1] and "--consent" in c[1]
+    ]
+    assert gemini_install, f"Expected gemini extensions install --consent; got {invoked}"
 
-    # And verify we still do NOT write the legacy broken codex rules file
-    codex_rules = fake_home / ".codex" / "rules" / "paircode.rules"
-    assert not codex_rules.exists(), (
-        f"paircode must never write {codex_rules} — that file breaks codex's rule loader"
-    )
+    # We do NOT write the legacy broken codex rules file
+    assert not (fake_home / ".codex" / "rules" / "paircode.rules").exists()
 
 
 def test_install_cleans_legacy_codex_rules_file(tmp_path, monkeypatch):

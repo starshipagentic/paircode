@@ -1,5 +1,88 @@
 # Changelog
 
+## 0.10.0 — native-register slash commands via satellite repos + cliworker.invoke()
+
+Migrated from file-drop (v0.9) to the industry-standard native-register flow
+for Codex and Gemini. Claude Code stays file-drop (no plugin install needed
+for a single command).
+
+### Install flow
+
+    pipx install paircode
+    paircode install
+
+Now runs:
+    * claude  — file-drop ~/.claude/commands/paircode.md          (unchanged)
+    * codex   — codex marketplace add starshipagentic/paircode-codex
+    * gemini  — gemini extensions install https://github.com/starshipagentic/paircode-gemini --consent
+
+Both subprocess calls go through `cliworker.invoke()` (the new v0.8 primitive).
+stdin=DEVNULL so any unexpected prompt fails fast instead of hanging.
+
+### Two satellite repos
+
+New companion repositories at starshipagentic/:
+    * paircode-codex    — single-plugin marketplace for Codex CLI
+    * paircode-gemini   — extension manifest + TOML command for Gemini CLI
+
+Both contain ONLY the slash-command manifest — no Python. They mirror
+`src/paircode/templates/{codex,gemini}_slash_command.{md,toml}` and are
+auto-synced by `scripts/release.py` on every paircode release.
+
+### Release pipeline
+
+New `scripts/release.py`:
+
+    ./scripts/release.py 0.10.0      # or: patch / minor / major
+
+Bumps paircode version, runs tests, commits + tags + beams paircode to PyPI
++ GitHub, then for each satellite: copies the latest template, bumps the
+manifest version, commits + tags + beams, and `gh release create` (critical
+for Gemini's release-lookup — without a GitHub release, Gemini's install
+command falls back to an interactive "install via git clone?" prompt).
+
+One command keeps pypi, the main repo, and both satellites version-locked.
+
+### Idempotency
+
+`paircode install` is now idempotent:
+    * codex  — greps ~/.codex/config.toml for `[marketplaces.paircode]`; skip if present
+    * gemini — `gemini extensions list` grep for `paircode`; skip if present
+    * claude — file-drop always overwrites (harmless idempotency)
+
+### Fallback on failure
+
+If either native-register call fails, `paircode install` prints the exact
+command for the user to run manually (with the captured stderr) and sets
+action="failed" — never silently succeeds with a non-working state.
+
+### Legacy cleanup still runs
+
+Every `paircode install` removes paths that older versions left:
+    ~/.codex/rules/paircode.rules       (v0.1–0.7 — broke codex's rule loader)
+    ~/.gemini/paircode.md               (v0.8 — obsolete reference file)
+    ~/.codex/prompts/paircode.md        (v0.9 — replaced by marketplace)
+    ~/.gemini/commands/paircode.toml    (v0.9 — replaced by extension)
+
+Users upgrading from ANY prior version get silent heal.
+
+### New dep
+
+    cliworker>=0.8.1   (for the `invoke()` primitive)
+
+### Tests
+
+52 green. 4 new in test_cli_smoke.py + 1 updated in test_smoke.py:
+    * test_installer_codex_calls_marketplace_add_via_invoke
+    * test_installer_gemini_calls_extensions_install_via_invoke
+    * test_installer_codex_idempotent_when_already_registered
+    * test_installer_fails_gracefully_with_actionable_message
+    * test_install_writes_claude_and_invokes_native_register (rewrite)
+
+Also verified end-to-end on a live machine: both real `codex marketplace add`
+and real `gemini extensions install` calls succeeded against the freshly-
+published satellite repos. `/paircode` appears in each tool's slash menu.
+
 ## 0.9.0 — real `/paircode` slash command in Codex and Gemini (file-drop)
 
 Research in April 2026 showed both Codex CLI (0.121.0+) and Gemini CLI

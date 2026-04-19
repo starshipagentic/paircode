@@ -191,13 +191,29 @@ def test_run_peer_fast_kwarg_passes_through(monkeypatch, tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Installer: codex no-op + legacy cleanup
+# Installer: native-register for codex + gemini via cliworker.invoke()
 # ---------------------------------------------------------------------------
 
-def test_installer_writes_codex_prompt_never_broken_rules_file(tmp_path, monkeypatch):
-    """Regression of the 'broken codex rules' bug: installer must write to
-    ~/.codex/prompts/paircode.md (the correct path) and NEVER to
-    ~/.codex/rules/paircode.rules (that breaks codex's Starlark rule loader)."""
+def _fake_cliworker_invoke_success(captured):
+    """Return a fake invoke that captures calls and always succeeds."""
+    from cliworker.core import CLIResult
+    from cliworker.registry import CLISpec
+
+    def fake(cli, *args, **kwargs):
+        captured.append((cli, args))
+        stdout = ""
+        # Simulate empty list output for gemini extensions list (idempotency check)
+        return CLIResult(
+            spec=CLISpec(cli=cli), ok=True, stdout=stdout, stderr="",
+            duration_s=0.01, returncode=0, argv=[cli, *args], skipped_reason=None,
+        )
+
+    return fake
+
+
+def test_installer_codex_calls_marketplace_add_via_invoke(tmp_path, monkeypatch):
+    """paircode v0.10 delegates codex install to cliworker.invoke()
+    running `codex marketplace add starshipagentic/paircode-codex`."""
     fake_home = tmp_path / "home"
     fake_home.mkdir()
     monkeypatch.setenv("HOME", str(fake_home))
@@ -210,17 +226,25 @@ def test_installer_writes_codex_prompt_never_broken_rules_file(tmp_path, monkeyp
     importlib.reload(inst)
 
     monkeypatch.setattr("shutil.which", lambda b: f"/fake/{b}")
-    results = inst.install_all()
+    captured: list[tuple] = []
+    monkeypatch.setattr("paircode.installer.invoke", _fake_cliworker_invoke_success(captured))
 
+    results = inst.install_all()
     actions = {r.cli_name: r.action for r in results}
     assert actions["codex"] == "installed"
-    assert (fake_home / ".codex" / "prompts" / "paircode.md").exists()
+
+    codex_calls = [c for c in captured if c[0] == "codex"]
+    assert any(
+        c[1] == ("marketplace", "add", "starshipagentic/paircode-codex")
+        for c in codex_calls
+    ), f"expected `codex marketplace add starshipagentic/paircode-codex`, got {codex_calls}"
+
+    # Never writes the broken legacy rules file
     assert not (fake_home / ".codex" / "rules" / "paircode.rules").exists()
 
 
-def test_installer_writes_gemini_toml_command(tmp_path, monkeypatch):
-    """Gemini slash commands are TOML (not markdown). Path must be
-    ~/.gemini/commands/paircode.toml with description + prompt fields."""
+def test_installer_gemini_calls_extensions_install_via_invoke(tmp_path, monkeypatch):
+    """paircode v0.10 runs `gemini extensions install <url> --consent`."""
     fake_home = tmp_path / "home"
     fake_home.mkdir()
     monkeypatch.setenv("HOME", str(fake_home))
@@ -233,17 +257,90 @@ def test_installer_writes_gemini_toml_command(tmp_path, monkeypatch):
     importlib.reload(inst)
 
     monkeypatch.setattr("shutil.which", lambda b: f"/fake/{b}")
-    results = inst.install_all()
+    captured: list[tuple] = []
+    monkeypatch.setattr("paircode.installer.invoke", _fake_cliworker_invoke_success(captured))
 
+    results = inst.install_all()
     actions = {r.cli_name: r.action for r in results}
     assert actions["gemini"] == "installed"
-    target = fake_home / ".gemini" / "commands" / "paircode.toml"
-    assert target.exists()
-    content = target.read_text()
-    assert 'description' in content
-    assert 'prompt' in content
-    # TOML syntax sanity — triple-quoted prompt
-    assert '"""' in content
+
+    gemini_installs = [
+        c for c in captured
+        if c[0] == "gemini" and c[1][0:2] == ("extensions", "install") and "--consent" in c[1]
+    ]
+    assert gemini_installs, f"expected gemini extensions install --consent; got {captured}"
+
+
+def test_installer_codex_idempotent_when_already_registered(tmp_path, monkeypatch):
+    """If the codex marketplace is already registered, install returns 'already'
+    without re-invoking `codex marketplace add`."""
+    fake_home = tmp_path / "home"
+    fake_home.mkdir()
+    (fake_home / ".codex").mkdir()
+    (fake_home / ".codex" / "config.toml").write_text(
+        '[marketplaces.paircode]\nsource = "https://github.com/starshipagentic/paircode-codex.git"\n'
+    )
+    monkeypatch.setenv("HOME", str(fake_home))
+    import importlib
+
+    import paircode.detect as d
+    import paircode.installer as inst
+
+    importlib.reload(d)
+    importlib.reload(inst)
+
+    monkeypatch.setattr("shutil.which", lambda b: f"/fake/{b}")
+    captured: list[tuple] = []
+    monkeypatch.setattr("paircode.installer.invoke", _fake_cliworker_invoke_success(captured))
+
+    results = inst.install_all()
+    codex_result = next(r for r in results if r.cli_name == "codex")
+    assert codex_result.action == "already", (
+        f"expected action='already'; got {codex_result.action!r} — {codex_result.message}"
+    )
+
+    # Marketplace-add must NOT have been invoked on codex
+    codex_add_calls = [c for c in captured if c[0] == "codex" and "marketplace" in c[1]]
+    assert not codex_add_calls, f"should not re-invoke marketplace add; got {codex_add_calls}"
+
+
+def test_installer_fails_gracefully_with_actionable_message(tmp_path, monkeypatch):
+    """When invoke() returns .ok=False, installer surfaces the command to run
+    manually (copy-paste friendly)."""
+    fake_home = tmp_path / "home"
+    fake_home.mkdir()
+    monkeypatch.setenv("HOME", str(fake_home))
+    import importlib
+
+    import paircode.detect as d
+    import paircode.installer as inst
+
+    importlib.reload(d)
+    importlib.reload(inst)
+
+    monkeypatch.setattr("shutil.which", lambda b: f"/fake/{b}")
+
+    def failing_invoke(cli, *args, **kwargs):
+        from cliworker.core import CLIResult
+        from cliworker.registry import CLISpec
+
+        return CLIResult(
+            spec=CLISpec(cli=cli), ok=False, stdout="", stderr="simulated failure",
+            duration_s=0.01, returncode=1, argv=[cli, *args], skipped_reason=None,
+        )
+
+    monkeypatch.setattr("paircode.installer.invoke", failing_invoke)
+
+    results = inst.install_all()
+
+    codex_r = next(r for r in results if r.cli_name == "codex")
+    assert codex_r.action == "failed"
+    assert "codex marketplace add starshipagentic/paircode-codex" in codex_r.message
+
+    gemini_r = next(r for r in results if r.cli_name == "gemini")
+    assert gemini_r.action == "failed"
+    assert "gemini extensions install" in gemini_r.message
+    assert "--consent" in gemini_r.message
 
 
 # ---------------------------------------------------------------------------

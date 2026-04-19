@@ -39,7 +39,7 @@ dependencies = [
     "click>=8.1",
     "pyyaml>=6.0",
     "rich>=13.0",
-    "cliworker>=0.7.1",
+    "cliworker>=0.8.1",
 ]
 
 [project.urls]
