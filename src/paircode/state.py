@@ -98,8 +98,44 @@ def load_state(root: Path) -> PaircodeState:
     )
 
 
+def _peer_id(entry) -> str | None:
+    """Extract `id` from a ProposedPeer or a dict-shaped peer entry."""
+    if entry is None:
+        return None
+    if isinstance(entry, dict):
+        pid = entry.get("id")
+    else:
+        pid = getattr(entry, "id", None)
+    if not pid:
+        return None
+    return str(pid)
+
+
+def ensure_peer_dirs(state: PaircodeState, proposed: Iterable) -> list[Path]:
+    """Create .paircode/peers/{peer.id}/ for each entry. Idempotent.
+
+    Accepts iterables of ProposedPeer dataclasses OR plain dicts (anything
+    with an `id` attribute / key). Silently skips entries without a usable id.
+    Returns the list of peer-dir paths that now exist (created or pre-existing).
+    """
+    state.peers_dir.mkdir(exist_ok=True)
+    created: list[Path] = []
+    for entry in proposed:
+        pid = _peer_id(entry)
+        if not pid:
+            continue
+        peer_dir = state.peers_dir / pid
+        peer_dir.mkdir(exist_ok=True)
+        created.append(peer_dir)
+    return created
+
+
 def init_paircode(project_root: Path | None = None, force: bool = False) -> PaircodeState:
-    """Bootstrap .paircode/ in `project_root` (or cwd). Returns the new state."""
+    """Bootstrap .paircode/ in `project_root` (or cwd). Returns the new state.
+
+    Also pre-creates a subdir per auto-detected peer under .paircode/peers/.
+    If no peers are detected, the parent dir exists but stays empty.
+    """
     if project_root is None:
         project_root = Path.cwd()
     project_root = project_root.resolve()
@@ -119,7 +155,21 @@ def init_paircode(project_root: Path | None = None, force: bool = False) -> Pair
 
     (root / PEERS_FILE).write_text(_read_template("peers.yaml"), encoding="utf-8")
 
-    return load_state(root)
+    state = load_state(root)
+
+    # Scaffold per-peer dirs for every auto-detected peer. Import here to
+    # avoid a circular import at module load (handshake imports detect,
+    # which is pure, but keeping state.py import-light is kinder).
+    try:
+        from paircode.handshake import propose_roster
+
+        ensure_peer_dirs(state, propose_roster())
+    except Exception:
+        # Scaffolding peers is best-effort; a detect failure shouldn't
+        # block bootstrap. The peers/ parent dir is already there.
+        pass
+
+    return state
 
 
 def open_focus(state: PaircodeState, name: str, prompt: str | None = None) -> Path:

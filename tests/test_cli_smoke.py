@@ -1,10 +1,11 @@
-"""End-to-end CLI smoke tests for paircode (v0.8+).
+"""End-to-end CLI smoke tests for paircode (Arch B, v0.11+).
 
 Invokes the real CLI via CliRunner and asserts on real output. Catches
 regressions unit tests miss: broken subcommands, click routing drift,
 wrong default behavior, missing help content.
 
-Mirrors the same approach we added to cliworker in its v0.5.5.
+Arch B surface: install / uninstall / ensure-scaffold / focus new / focus
+active / roster / invoke / bare (state print).
 """
 from __future__ import annotations
 
@@ -28,13 +29,12 @@ from paircode.cli import main
         ["--version"],
         ["install", "--help"],
         ["uninstall", "--help"],
-        ["handshake", "--help"],
-        ["status", "--help"],
-        ["init", "--help"],
+        ["ensure-scaffold", "--help"],
         ["focus", "--help"],
-        ["stage", "--help"],
-        ["seal", "--help"],
-        ["drive", "--help"],
+        ["focus", "new", "--help"],
+        ["focus", "active", "--help"],
+        ["roster", "--help"],
+        ["invoke", "--help"],
     ],
 )
 def test_every_command_help_is_reachable(cmd_argv):
@@ -50,11 +50,23 @@ def test_main_help_lists_all_public_subcommands():
     runner = CliRunner()
     result = runner.invoke(main, ["--help"])
     assert result.exit_code == 0
-    for cmd in (
-        "install", "uninstall", "handshake", "status",
-        "init", "focus", "stage", "seal", "drive",
-    ):
+    for cmd in ("install", "uninstall", "ensure-scaffold",
+                "focus", "roster", "invoke"):
         assert cmd in result.output, f"Main --help missing subcommand: {cmd}"
+
+
+def test_retired_verbs_are_gone():
+    """init/handshake/status/stage/seal/drive were removed in Arch B.
+    If anyone reintroduces them as user-facing verbs, this breaks."""
+    runner = CliRunner()
+    help_text = runner.invoke(main, ["--help"]).output
+    for retired in ("init", "handshake", "status", "stage", "seal", "drive"):
+        # Check that retired verbs aren't listed in the commands section.
+        # `invoke` legitimately contains the substring of none of these; safe.
+        lines = [l for l in help_text.splitlines() if l.strip().startswith(retired)]
+        assert not lines, (
+            f"Retired verb {retired!r} surfaced in top-level help:\n{help_text}"
+        )
 
 
 def test_version_string_matches_dunder():
@@ -65,17 +77,223 @@ def test_version_string_matches_dunder():
 
 
 # ---------------------------------------------------------------------------
-# Runner <-> cliworker integration
+# Bare paircode — state print, former `status`
+# ---------------------------------------------------------------------------
+
+def test_bare_paircode_without_state_prints_hint(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    runner = CliRunner()
+    result = runner.invoke(main, [])
+    assert result.exit_code == 0
+    assert "install" in result.output.lower()
+
+
+def test_bare_paircode_finds_existing_state(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    # Seed via ensure-scaffold (replaces old init)
+    runner = CliRunner()
+    monkeypatch.setattr("paircode.cli.propose_roster", lambda: [])
+    runner.invoke(main, ["ensure-scaffold"])
+    result = runner.invoke(main, [])
+    assert result.exit_code == 0
+    assert ".paircode" in result.output
+
+
+# ---------------------------------------------------------------------------
+# ensure-scaffold
+# ---------------------------------------------------------------------------
+
+def test_ensure_scaffold_creates_paircode_dir(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("paircode.cli.propose_roster", lambda: [])
+    runner = CliRunner()
+    result = runner.invoke(main, ["ensure-scaffold"])
+    assert result.exit_code == 0, result.output
+    assert (tmp_path / ".paircode").exists()
+    assert (tmp_path / ".paircode" / "JOURNEY.md").exists()
+    assert (tmp_path / ".paircode" / "peers.yaml").exists()
+
+
+def test_ensure_scaffold_is_idempotent(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("paircode.cli.propose_roster", lambda: [])
+    runner = CliRunner()
+    runner.invoke(main, ["ensure-scaffold"])
+    second = runner.invoke(main, ["ensure-scaffold"])
+    assert second.exit_code == 0, second.output
+    # Silent on second run (no init, no handshake — roster is still empty).
+    assert second.output.strip() == ""
+
+
+# ---------------------------------------------------------------------------
+# focus new / focus active
+# ---------------------------------------------------------------------------
+
+def test_focus_new_creates_dir_and_prints_path(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("paircode.cli.propose_roster", lambda: [])
+    runner = CliRunner()
+    runner.invoke(main, ["ensure-scaffold"])
+    result = runner.invoke(main, ["focus", "new", "my-first-focus", "--prompt", "hello"])
+    assert result.exit_code == 0, result.output
+    focus_path = Path(result.output.strip())
+    assert focus_path.exists()
+    assert focus_path.name.startswith("focus-01-")
+    assert (focus_path / "FOCUS.md").exists()
+    assert (focus_path / "research").exists()
+
+
+def test_focus_active_without_focus_errors(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("paircode.cli.propose_roster", lambda: [])
+    runner = CliRunner()
+    runner.invoke(main, ["ensure-scaffold"])
+    result = runner.invoke(main, ["focus", "active"])
+    assert result.exit_code != 0
+    assert "no focus" in result.output.lower()
+
+
+def test_focus_active_prints_most_recent(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("paircode.cli.propose_roster", lambda: [])
+    runner = CliRunner()
+    runner.invoke(main, ["ensure-scaffold"])
+    runner.invoke(main, ["focus", "new", "one"])
+    runner.invoke(main, ["focus", "new", "two"])
+    result = runner.invoke(main, ["focus", "active"])
+    assert result.exit_code == 0, result.output
+    # "two" was created last → it's active (sort by focus-NN prefix)
+    assert "focus-02-two" in result.output
+
+
+# ---------------------------------------------------------------------------
+# roster
+# ---------------------------------------------------------------------------
+
+def test_roster_empty_when_no_peers(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("paircode.cli.propose_roster", lambda: [])
+    runner = CliRunner()
+    runner.invoke(main, ["ensure-scaffold"])
+    result = runner.invoke(main, ["roster"])
+    assert result.exit_code == 0
+    assert result.output.strip() == ""
+
+
+def test_roster_prints_peer_ids(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    from paircode.handshake import ProposedPeer
+    peers = [
+        ProposedPeer(id="peer-a-codex", cli="codex", priority="high", notes=""),
+        ProposedPeer(id="peer-b-gemini", cli="gemini", priority="low", notes=""),
+    ]
+    monkeypatch.setattr("paircode.cli.propose_roster", lambda: peers)
+    runner = CliRunner()
+    runner.invoke(main, ["ensure-scaffold"])
+    result = runner.invoke(main, ["roster"])
+    assert result.exit_code == 0, result.output
+    lines = result.output.strip().splitlines()
+    assert "peer-a-codex" in lines
+    assert "peer-b-gemini" in lines
+
+
+# ---------------------------------------------------------------------------
+# invoke — the team-lead's peer-firing helper
+# ---------------------------------------------------------------------------
+
+def test_invoke_unknown_peer_errors(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("paircode.cli.propose_roster", lambda: [])
+    runner = CliRunner()
+    runner.invoke(main, ["ensure-scaffold"])
+    result = runner.invoke(
+        main,
+        ["invoke", "peer-z-nonexistent", "hi", "--out", str(tmp_path / "out.md")],
+    )
+    assert result.exit_code != 0
+    assert "unknown peer" in result.output.lower()
+
+
+def test_invoke_calls_run_peer_and_writes_trace(tmp_path, monkeypatch):
+    """invoke must delegate to runner.run_peer with the peer's cli + model
+    from peers.yaml, and the --out path lands on disk (run_peer handles the
+    write; here we just confirm the wiring)."""
+    from paircode.handshake import ProposedPeer
+    from paircode.runner import PeerRunResult
+
+    monkeypatch.chdir(tmp_path)
+    peers = [ProposedPeer(id="peer-a-codex", cli="codex", priority="high", notes="")]
+    monkeypatch.setattr("paircode.cli.propose_roster", lambda: peers)
+    runner = CliRunner()
+    runner.invoke(main, ["ensure-scaffold"])
+
+    captured = {}
+
+    def fake_run_peer(peer_id, cli, prompt, output_path, **kwargs):
+        captured["peer_id"] = peer_id
+        captured["cli"] = cli
+        captured["prompt"] = prompt
+        captured["output_path"] = output_path
+        captured["fast"] = kwargs.get("fast")
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text("fake peer output", encoding="utf-8")
+        return PeerRunResult(
+            peer_id=peer_id, cli=cli, ok=True, stdout="fake", stderr="",
+            duration_s=0.1, command=[],
+        )
+
+    monkeypatch.setattr("paircode.cli.run_peer", fake_run_peer)
+
+    out_file = tmp_path / "peer-a-v1.md"
+    result = runner.invoke(main, [
+        "invoke", "peer-a-codex", "what is TCP?",
+        "--out", str(out_file),
+    ])
+    assert result.exit_code == 0, result.output
+    assert captured["peer_id"] == "peer-a-codex"
+    assert captured["cli"] == "codex"
+    assert captured["prompt"] == "what is TCP?"
+    assert captured["output_path"] == out_file
+    assert out_file.exists()
+
+
+def test_invoke_failure_exits_nonzero(tmp_path, monkeypatch):
+    from paircode.handshake import ProposedPeer
+    from paircode.runner import PeerRunResult
+
+    monkeypatch.chdir(tmp_path)
+    peers = [ProposedPeer(id="peer-a-codex", cli="codex", priority="high", notes="")]
+    monkeypatch.setattr("paircode.cli.propose_roster", lambda: peers)
+    runner = CliRunner()
+    runner.invoke(main, ["ensure-scaffold"])
+
+    def failing(peer_id, cli, prompt, output_path, **kwargs):
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text("FAIL trace", encoding="utf-8")
+        return PeerRunResult(
+            peer_id=peer_id, cli=cli, ok=False, stdout="",
+            stderr="subscription lapsed", duration_s=1.0, command=[],
+        )
+
+    monkeypatch.setattr("paircode.cli.run_peer", failing)
+
+    result = runner.invoke(main, [
+        "invoke", "peer-a-codex", "hi",
+        "--out", str(tmp_path / "out.md"),
+    ])
+    assert result.exit_code != 0
+
+
+# ---------------------------------------------------------------------------
+# Runner <-> cliworker integration (kept from v0.10)
 # ---------------------------------------------------------------------------
 
 def test_runner_imports_cliworker():
     """Regression: paircode.runner must import and delegate to cliworker as
     of v0.8+. If someone reverts the refactor, this test breaks."""
-    import paircode.runner as runner
-    import cliworker
+    import paircode.runner as runner_mod
 
-    # The run_peer function should internally call cliworker.run
-    source = Path(runner.__file__).read_text()
+    source = Path(runner_mod.__file__).read_text()
     assert "from cliworker" in source, (
         "paircode.runner must use cliworker — "
         "the whole point of v0.8 was to delegate to it"
@@ -88,7 +306,6 @@ def test_run_peer_wraps_cliworker_result(monkeypatch, tmp_path):
     with the peer_id set + the file-trace written to disk."""
     from paircode.runner import run_peer, PeerRunResult
 
-    # Intercept cliworker.run so no real subprocess fires
     from cliworker.core import CLIResult
     from cliworker import get_spec
 
@@ -111,7 +328,6 @@ def test_run_peer_wraps_cliworker_result(monkeypatch, tmp_path):
         timeout_s=30,
     )
 
-    # Returns a proper PeerRunResult
     assert isinstance(result, PeerRunResult)
     assert result.peer_id == "peer-a-fake"
     assert result.cli == "claude"
@@ -119,7 +335,6 @@ def test_run_peer_wraps_cliworker_result(monkeypatch, tmp_path):
     assert result.stdout == "mocked answer"
     assert result.duration_s == pytest.approx(0.42)
 
-    # File-trace landed with the correct header
     assert out_path.exists()
     content = out_path.read_text()
     assert "peer_id: peer-a-fake" in content
@@ -129,8 +344,7 @@ def test_run_peer_wraps_cliworker_result(monkeypatch, tmp_path):
 
 
 def test_run_peer_with_failure_still_writes_trace(monkeypatch, tmp_path):
-    """Failed peer runs must still leave a file-trace on disk, with the
-    failure captured — that's the whole point of 'every thought on disk'."""
+    """Failed peer runs must still leave a file-trace on disk."""
     from paircode.runner import run_peer
     from cliworker.core import CLIResult
     from cliworker import get_spec
@@ -161,7 +375,6 @@ def test_run_peer_fast_kwarg_passes_through(monkeypatch, tmp_path):
     """run_peer(fast=True) must land as fast=True on cliworker.run()."""
     from paircode.runner import run_peer
     from cliworker.core import CLIResult
-    from cliworker import get_spec
 
     captured = {}
 
@@ -181,7 +394,6 @@ def test_run_peer_fast_kwarg_passes_through(monkeypatch, tmp_path):
     )
     assert captured["fast"] is True
 
-    # And default: no fast
     captured.clear()
     run_peer(
         peer_id="p", cli="claude", prompt="hi",
@@ -195,16 +407,13 @@ def test_run_peer_fast_kwarg_passes_through(monkeypatch, tmp_path):
 # ---------------------------------------------------------------------------
 
 def _fake_cliworker_invoke_success(captured):
-    """Return a fake invoke that captures calls and always succeeds."""
     from cliworker.core import CLIResult
     from cliworker.registry import CLISpec
 
     def fake(cli, *args, **kwargs):
         captured.append((cli, args))
-        stdout = ""
-        # Simulate empty list output for gemini extensions list (idempotency check)
         return CLIResult(
-            spec=CLISpec(cli=cli), ok=True, stdout=stdout, stderr="",
+            spec=CLISpec(cli=cli), ok=True, stdout="", stderr="",
             duration_s=0.01, returncode=0, argv=[cli, *args], skipped_reason=None,
         )
 
@@ -239,8 +448,35 @@ def test_installer_codex_calls_marketplace_add_via_invoke(tmp_path, monkeypatch)
         for c in codex_calls
     ), f"expected `codex marketplace add starshipagentic/paircode-codex`, got {codex_calls}"
 
-    # Never writes the broken legacy rules file
     assert not (fake_home / ".codex" / "rules" / "paircode.rules").exists()
+
+
+def test_installer_claude_writes_slash_command_and_peer_agent(tmp_path, monkeypatch):
+    """Arch B: install_claude must drop BOTH the slash command and the
+    paircode-peer sub-agent definition, or the team-lead Agent() spawn fails."""
+    fake_home = tmp_path / "home"
+    fake_home.mkdir()
+    monkeypatch.setenv("HOME", str(fake_home))
+    import importlib
+
+    import paircode.detect as d
+    import paircode.installer as inst
+
+    importlib.reload(d)
+    importlib.reload(inst)
+
+    monkeypatch.setattr("shutil.which", lambda b: f"/fake/{b}")
+    captured: list[tuple] = []
+    monkeypatch.setattr("paircode.installer.invoke", _fake_cliworker_invoke_success(captured))
+
+    results = inst.install_all()
+    actions = {r.cli_name: r.action for r in results}
+    assert actions["claude"] == "installed"
+
+    slash_cmd = fake_home / ".claude" / "commands" / "paircode.md"
+    peer_agent = fake_home / ".claude" / "agents" / "paircode-peer.md"
+    assert slash_cmd.exists(), "Slash command missing"
+    assert peer_agent.exists(), "paircode-peer sub-agent missing — Agent() spawn will fail"
 
 
 def test_installer_gemini_calls_extensions_install_via_invoke(tmp_path, monkeypatch):
@@ -272,8 +508,6 @@ def test_installer_gemini_calls_extensions_install_via_invoke(tmp_path, monkeypa
 
 
 def test_installer_codex_idempotent_when_already_registered(tmp_path, monkeypatch):
-    """If the codex marketplace is already registered, install returns 'already'
-    without re-invoking `codex marketplace add`."""
     fake_home = tmp_path / "home"
     fake_home.mkdir()
     (fake_home / ".codex").mkdir()
@@ -299,14 +533,11 @@ def test_installer_codex_idempotent_when_already_registered(tmp_path, monkeypatc
         f"expected action='already'; got {codex_result.action!r} — {codex_result.message}"
     )
 
-    # Marketplace-add must NOT have been invoked on codex
     codex_add_calls = [c for c in captured if c[0] == "codex" and "marketplace" in c[1]]
     assert not codex_add_calls, f"should not re-invoke marketplace add; got {codex_add_calls}"
 
 
 def test_installer_fails_gracefully_with_actionable_message(tmp_path, monkeypatch):
-    """When invoke() returns .ok=False, installer surfaces the command to run
-    manually (copy-paste friendly)."""
     fake_home = tmp_path / "home"
     fake_home.mkdir()
     monkeypatch.setenv("HOME", str(fake_home))
@@ -341,37 +572,3 @@ def test_installer_fails_gracefully_with_actionable_message(tmp_path, monkeypatc
     assert gemini_r.action == "failed"
     assert "gemini extensions install" in gemini_r.message
     assert "--consent" in gemini_r.message
-
-
-# ---------------------------------------------------------------------------
-# Init + status dispatch smoke
-# ---------------------------------------------------------------------------
-
-def test_init_creates_paircode_dir(tmp_path, monkeypatch):
-    monkeypatch.chdir(tmp_path)
-    runner = CliRunner()
-    result = runner.invoke(main, ["init"])
-    assert result.exit_code == 0, result.output
-    assert (tmp_path / ".paircode").exists()
-    assert (tmp_path / ".paircode" / "JOURNEY.md").exists()
-    assert (tmp_path / ".paircode" / "peers.yaml").exists()
-
-
-def test_status_finds_paircode_dir(tmp_path, monkeypatch):
-    monkeypatch.chdir(tmp_path)
-    runner = CliRunner()
-    # First init
-    runner.invoke(main, ["init"])
-    # Then status should find it and exit cleanly
-    result = runner.invoke(main, ["status"])
-    assert result.exit_code == 0
-    assert ".paircode" in result.output
-
-
-def test_status_without_paircode_dir_prints_hint(tmp_path, monkeypatch):
-    monkeypatch.chdir(tmp_path)
-    runner = CliRunner()
-    result = runner.invoke(main, ["status"])
-    # Should not crash; should suggest init
-    assert result.exit_code == 0
-    assert "init" in result.output.lower()

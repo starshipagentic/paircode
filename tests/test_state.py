@@ -5,7 +5,9 @@ from pathlib import Path
 
 import pytest
 
+from paircode.handshake import ProposedPeer
 from paircode.state import (
+    ensure_peer_dirs,
     find_paircode,
     init_paircode,
     load_state,
@@ -25,7 +27,44 @@ def test_init_creates_paircode_structure(tmp_path: Path):
     assert state.active_focus is None
 
 
-def test_init_refuses_if_exists_unless_force(tmp_path: Path):
+def test_init_scaffolds_peer_dirs_from_detected_clis(tmp_path: Path, monkeypatch):
+    """init_paircode should create .paircode/peers/{id}/ for each detected peer."""
+    fake_proposed = [
+        ProposedPeer(id="peer-a-codex", cli="codex", priority="high", notes=""),
+        ProposedPeer(id="peer-b-gemini", cli="gemini", priority="low", notes=""),
+    ]
+    monkeypatch.setattr("paircode.handshake.propose_roster", lambda: fake_proposed)
+
+    state = init_paircode(tmp_path)
+    assert (state.peers_dir / "peer-a-codex").is_dir()
+    assert (state.peers_dir / "peer-b-gemini").is_dir()
+
+
+def test_init_with_no_detected_peers_leaves_peers_dir_empty(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr("paircode.handshake.propose_roster", lambda: [])
+    state = init_paircode(tmp_path)
+    assert state.peers_dir.is_dir()
+    assert list(state.peers_dir.iterdir()) == []
+
+
+def test_ensure_peer_dirs_accepts_dicts_and_is_idempotent(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr("paircode.handshake.propose_roster", lambda: [])
+    state = init_paircode(tmp_path)
+    # Accepts dict-shaped entries (as persisted in peers.yaml)
+    dicts = [{"id": "peer-a-codex", "cli": "codex"}, {"id": "peer-c-ollama"}]
+    created = ensure_peer_dirs(state, dicts)
+    assert len(created) == 2
+    assert (state.peers_dir / "peer-a-codex").is_dir()
+    # Running again is a no-op (idempotent)
+    created_again = ensure_peer_dirs(state, dicts)
+    assert len(created_again) == 2
+    # Entries with no id are silently skipped
+    created_blank = ensure_peer_dirs(state, [{}, {"cli": "codex"}])
+    assert created_blank == []
+
+
+def test_init_refuses_if_exists_unless_force(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr("paircode.handshake.propose_roster", lambda: [])
     init_paircode(tmp_path)
     with pytest.raises(FileExistsError):
         init_paircode(tmp_path)

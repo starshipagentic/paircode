@@ -11,7 +11,6 @@
 #   id              — peer-a, peer-b, peer-c, ... (unique, immutable)
 #   cli             — the command-line binary used to invoke this peer (claude/codex/gemini/ollama/aider/...)
 #   model           — specific model string (optional; CLI default if omitted)
-#   mode            — full-fork | pair-code | opinion-only
 #   priority        — high | medium | low (used when budget is tight)
 #   daily_budget    — advisory only for now; paircode logs when a peer sits out
 #

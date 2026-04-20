@@ -8,7 +8,7 @@ from click.testing import CliRunner
 
 from paircode import __version__
 from paircode.cli import main
-from paircode.detect import CliInfo, KNOWN_CLIS
+from paircode.detect import CliInfo  # noqa: F401 — used by other tests in repo
 
 
 def test_version_flag_prints_version():
@@ -25,12 +25,10 @@ def test_help_flag_lists_subcommands():
     for subcmd in (
         "install",
         "uninstall",
-        "handshake",
-        "status",
-        "init",
+        "ensure-scaffold",
         "focus",
-        "stage",
-        "drive",
+        "roster",
+        "invoke",
     ):
         assert subcmd in result.output
 
@@ -40,18 +38,6 @@ def test_bare_invocation_shows_welcome():
     result = runner.invoke(main, [])
     assert result.exit_code == 0
     assert "paircode" in result.output
-
-
-def test_handshake_shows_table(tmp_path, monkeypatch):
-    # detect_all reads from KNOWN_CLIS; we rely on real PATH here for smoke test.
-    runner = CliRunner()
-    result = runner.invoke(main, ["handshake"])
-    assert result.exit_code == 0
-    # Table header should appear
-    assert "CLI" in result.output
-    # At minimum the known names should be listed
-    for name in KNOWN_CLIS:
-        assert name in result.output
 
 
 def test_install_writes_claude_and_invokes_native_register(tmp_path, monkeypatch):

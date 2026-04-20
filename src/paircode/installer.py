@@ -55,7 +55,13 @@ def _read_template(name: str) -> str:
 # ---------------------------------------------------------------------------
 
 def install_claude(info: CliInfo) -> InstallResult:
-    """Write ~/.claude/commands/paircode.md — file-drop (native for Claude Code)."""
+    """Write ~/.claude/commands/paircode.md AND ~/.claude/agents/paircode-peer.md.
+
+    Arch B uses Claude's Agent Teams: the team-lead slash command spawns
+    `Agent(name: "paircode-peer", ...)` members that shell out via `paircode
+    invoke`. The sub-agent definition file is required for those spawns to
+    resolve, so we write both in the same step.
+    """
     if not info.installed:
         return InstallResult(
             cli_name="claude", action="skipped", path=None,
@@ -63,11 +69,17 @@ def install_claude(info: CliInfo) -> InstallResult:
         )
     commands_dir = info.config_dir / "commands"
     commands_dir.mkdir(parents=True, exist_ok=True)
-    target = commands_dir / "paircode.md"
-    target.write_text(_read_template("claude_slash_command.md"), encoding="utf-8")
+    cmd_target = commands_dir / "paircode.md"
+    cmd_target.write_text(_read_template("claude_slash_command.md"), encoding="utf-8")
+
+    agents_dir = info.config_dir / "agents"
+    agents_dir.mkdir(parents=True, exist_ok=True)
+    agent_target = agents_dir / "paircode-peer.md"
+    agent_target.write_text(_read_template("claude_peer_agent.md"), encoding="utf-8")
+
     return InstallResult(
-        cli_name="claude", action="installed", path=target,
-        message=f"Wrote /paircode slash command to {target}.",
+        cli_name="claude", action="installed", path=cmd_target,
+        message=f"Wrote /paircode to {cmd_target} + paircode-peer agent to {agent_target}.",
     )
 
 
@@ -213,24 +225,36 @@ def uninstall_all() -> list[InstallResult]:
     file-drop removal where not."""
     results: list[InstallResult] = []
 
-    # Claude — file-drop, just remove the file.
-    claude_cmd = Path.home() / ".claude" / "commands" / "paircode.md"
-    if claude_cmd.exists():
+    # Claude — file-drop. Remove slash command AND the paircode-peer sub-agent.
+    claude_home = Path.home() / ".claude"
+    claude_paths = [
+        claude_home / "commands" / "paircode.md",
+        claude_home / "agents" / "paircode-peer.md",
+    ]
+    removed = []
+    failed = []
+    for p in claude_paths:
+        if not p.exists():
+            continue
         try:
-            claude_cmd.unlink()
-            results.append(InstallResult(
-                cli_name="claude", action="installed",
-                path=claude_cmd, message=f"Removed {claude_cmd}",
-            ))
+            p.unlink()
+            removed.append(str(p))
         except OSError as exc:
-            results.append(InstallResult(
-                cli_name="claude", action="failed",
-                path=claude_cmd, message=f"Failed to remove {claude_cmd}: {exc}",
-            ))
+            failed.append(f"{p}: {exc}")
+    if failed:
+        results.append(InstallResult(
+            cli_name="claude", action="failed", path=None,
+            message=f"Failed to remove: {'; '.join(failed)}",
+        ))
+    elif removed:
+        results.append(InstallResult(
+            cli_name="claude", action="installed", path=None,
+            message=f"Removed: {', '.join(removed)}",
+        ))
     else:
         results.append(InstallResult(
-            cli_name="claude", action="skipped",
-            path=claude_cmd, message=f"Nothing to remove at {claude_cmd}",
+            cli_name="claude", action="skipped", path=None,
+            message="Nothing to remove under ~/.claude/.",
         ))
 
     # Codex — no native remove command. Strip the marketplace stanza from config.toml

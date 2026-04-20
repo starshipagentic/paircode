@@ -14,7 +14,6 @@ from paircode.detect import detect_all
 class ProposedPeer:
     id: str
     cli: str
-    mode: str
     priority: str
     notes: str = ""
 
@@ -22,11 +21,11 @@ class ProposedPeer:
 # Default ranking of peers when auto-proposing a roster.
 # Alpha is typically Claude (the primary LLM the captain is already using),
 # so Claude is skipped here — peers are the other voices.
-_PEER_RANK: list[tuple[str, str, str, str]] = [
-    # (cli, default_mode, priority, notes)
-    ("codex", "full-fork", "high", "Second opinion, good for silent-agreement hunts"),
-    ("ollama", "full-fork", "medium", "Local unlimited; good if a capable model is pulled"),
-    ("gemini", "opinion-only", "low", "Free tier — use for quick opinions, not full forks"),
+_PEER_RANK: list[tuple[str, str, str]] = [
+    # (cli, priority, notes)
+    ("codex", "high", "Second opinion, good for silent-agreement hunts"),
+    ("ollama", "medium", "Local unlimited; good if a capable model is pulled"),
+    ("gemini", "low", "Free tier — use for quick opinions, not full forks"),
 ]
 
 
@@ -35,14 +34,13 @@ def propose_roster() -> list[ProposedPeer]:
     detected = detect_all()
     proposed: list[ProposedPeer] = []
     peer_letter = ord("a")
-    for cli, default_mode, priority, notes in _PEER_RANK:
+    for cli, priority, notes in _PEER_RANK:
         info = detected.get(cli)
         if info and info.installed:
             proposed.append(
                 ProposedPeer(
                     id=f"peer-{chr(peer_letter)}-{cli}",
                     cli=cli,
-                    mode=default_mode,
                     priority=priority,
                     notes=notes,
                 )
