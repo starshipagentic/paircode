@@ -115,8 +115,14 @@ def ensure_scaffold() -> None:
         proposed = propose_roster()
         if proposed:
             write_peers(state, proposed_as_yaml_dicts(proposed))
-            ensure_peer_dirs(state, proposed)
+            peers = proposed_as_yaml_dicts(proposed)
             proposed_count = len(proposed)
+
+    # Always reconcile sandbox dirs with the roster-of-record (peers.yaml).
+    # Idempotent via mkdir(exist_ok=True); recreates any missing peer sandbox.
+    # Without this, roster peers added after first init (or dropped by a rename)
+    # never get their sandbox dir back.
+    ensure_peer_dirs(state, peers)
 
     if did_init:
         click.echo(f"init {state.root}")

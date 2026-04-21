@@ -1,0 +1,16 @@
+name: test
+description: Write, execute, and review tests for a target surface.
+stages: [test-plan, test-execute, test-review]
+stage_overrides:
+  test-plan:
+    prompt: |
+      Read $FOCUS/FOCUS.md. Write a KISS test-writing plan: per-file test
+      list, fixtures needed, framework, happy-path vs edge-case split.
+  test-execute:
+    prompt: |
+      Read the plan at $FOCUS/test-plan/*-FINAL.md. Write the tests in
+      your peer workspace. Run them. Report pass/fail + new bugs surfaced.
+  test-review:
+    prompt: |
+      Read $FOCUS/test-execute/*-FINAL.md. Critique coverage + fragility.
+      Are the tests actually testing behavior, or just asserting on shape?

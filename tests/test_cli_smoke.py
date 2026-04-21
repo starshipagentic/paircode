@@ -126,6 +126,43 @@ def test_ensure_scaffold_is_idempotent(tmp_path, monkeypatch):
     assert second.output.strip() == ""
 
 
+def test_ensure_scaffold_recreates_missing_peer_sandbox(tmp_path, monkeypatch):
+    """Roster-of-record wins. If peers.yaml has a peer but its sandbox dir
+    went missing (rename, manual rm, whatever), ensure-scaffold must recreate
+    it on next run — idempotently."""
+    import shutil
+
+    from paircode.handshake import ProposedPeer
+
+    monkeypatch.chdir(tmp_path)
+    peers = [
+        ProposedPeer(id="peer-a-codex", cli="codex", priority="high", notes=""),
+        ProposedPeer(id="peer-b-gemini", cli="gemini", priority="low", notes=""),
+    ]
+    monkeypatch.setattr("paircode.cli.propose_roster", lambda: peers)
+    runner = CliRunner()
+    runner.invoke(main, ["ensure-scaffold"])
+
+    sandbox = tmp_path / ".paircode" / "sandbox"
+    assert (sandbox / "peer-a-codex").is_dir()
+    assert (sandbox / "peer-b-gemini").is_dir()
+
+    # Simulate the real-world drift: gemini's sandbox gets deleted.
+    shutil.rmtree(sandbox / "peer-b-gemini")
+    assert not (sandbox / "peer-b-gemini").exists()
+
+    # Re-running ensure-scaffold must put it back. Roster (peers.yaml) is
+    # the source of truth — propose_roster() returning the same list should
+    # NOT be required for reconciliation.
+    monkeypatch.setattr("paircode.cli.propose_roster", lambda: [])
+    result = runner.invoke(main, ["ensure-scaffold"])
+    assert result.exit_code == 0, result.output
+    assert (sandbox / "peer-b-gemini").is_dir(), (
+        "ensure-scaffold should reconcile sandbox dirs against peers.yaml, "
+        "not just on fresh handshake"
+    )
+
+
 # ---------------------------------------------------------------------------
 # focus new / focus active
 # ---------------------------------------------------------------------------

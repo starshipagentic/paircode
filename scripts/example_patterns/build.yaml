@@ -1,0 +1,3 @@
+name: build
+description: Full build flow — cold research to shipped code.
+stages: [research, plan, execute]

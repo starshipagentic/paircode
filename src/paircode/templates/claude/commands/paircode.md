@@ -165,6 +165,7 @@ Keep it under 200 words. Brief, honest, actionable.
 - **Never skip Step 1.** The focus and roster helpers do the work Python is better at.
 - **Never invent peer commands.** Always route through `paircode invoke <id> "..." --out <path>` — that's how cliworker's speed flags, MCP strip, and output tracing work.
 - **Never pass the interactive Claude session as a peer by mistake.** `paircode roster --alpha claude` handles that for you.
+- **Fire every peer in `paircode roster`** unless the user's prompt explicitly passes `--peer`/`--peers`. don't quarantine on prior failures.
 - **Peer sandboxes are always available, never required.** Use them when it materially sharpens your answer, not by default.
 - **The user's prompt is implicit go-ahead for the whole `{flow}`.** Do not pause for permission between stages. If you must stop early, say so explicitly in the final report with the reason.
 - **No AI attribution** in any artifact you write (consensus.md, alpha-*.md). See the maintainer's CLAUDE.md.
