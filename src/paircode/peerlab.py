@@ -41,6 +41,30 @@ SEED_EXCLUDES: tuple[str, ...] = (
 
 GITIGNORE_BLOCK_HEADER = "# peerlab — per-peer independent parallel labs"
 
+# Defaults dropped into each new peer lab's own .gitignore so peer commits
+# don't accidentally include Python bytecode, editor junk, OS cruft.
+# If the lab inherited a .gitignore from the project root (rsync seed), we
+# APPEND this block — user's rules win, these are a safety net.
+LAB_GITIGNORE_BLOCK = """\
+# peerlab defaults — python + editor junk (keep peer commits clean)
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.coverage
+.coverage.*
+htmlcov/
+.DS_Store
+.idea/
+.vscode/
+*.swp
+"""
+LAB_GITIGNORE_MARKER = "peerlab defaults"
+
 
 @dataclass(frozen=True)
 class EnsureResult:
@@ -108,6 +132,25 @@ def _rsync_project(src: Path, dst: Path, excludes: Iterable[str] = SEED_EXCLUDES
     shutil.copytree(src, dst, ignore=_ignore)
 
 
+def ensure_lab_gitignore(lab: Path) -> bool:
+    """Ensure the peer lab has Python/editor junk gitignored. Idempotent.
+
+    If the lab already has a `.gitignore` (inherited via rsync from the
+    project root), our block is appended so user rules win. If none exists
+    (greenfield), our block IS the .gitignore.
+
+    Returns True if the block was added this call, False if it was already
+    there (marker detection).
+    """
+    gitignore = lab / ".gitignore"
+    existing = gitignore.read_text(encoding="utf-8") if gitignore.exists() else ""
+    if LAB_GITIGNORE_MARKER in existing:
+        return False
+    new_text = (existing.rstrip() + "\n\n" if existing.strip() else "") + LAB_GITIGNORE_BLOCK
+    gitignore.write_text(new_text, encoding="utf-8")
+    return True
+
+
 def _git_init(lab: Path) -> None:
     """`git init` inside `lab/`. No-op if already inited."""
     if (lab / ".git").exists():
@@ -121,17 +164,24 @@ def _git_init(lab: Path) -> None:
         subprocess.run(["git", "init", "--quiet", str(lab)], check=True)
 
 
-def _git_initial_commit(lab: Path, message: str = "initial seed from project root") -> bool:
+def _git_initial_commit(
+    lab: Path, peer_id: str, message: str = "initial seed from project root"
+) -> bool:
     """Stage everything + commit. Returns True if a commit was made.
 
-    Sets local-only user.name/email (doesn't touch global git config) so the
-    commit is authored even on machines without a global identity.
+    Authors the commit as the peer itself (`{peer_id} <{peer_id}@peerlab.local>`)
+    via lab-local git config. Every subsequent peer commit inside this lab
+    inherits that local identity — so `git log` in a peer's lab attributes
+    all work to that peer, clean replay.
     """
     if not any(lab.iterdir()):
         return False
-    # Local git config — scoped to this repo
-    subprocess.run(["git", "-C", str(lab), "config", "user.name", "paircode-peerlab"], check=False)
-    subprocess.run(["git", "-C", str(lab), "config", "user.email", "peerlab@paircode.local"], check=False)
+    # Local git config — scoped to this lab, doesn't touch global identity.
+    subprocess.run(["git", "-C", str(lab), "config", "user.name", peer_id], check=False)
+    subprocess.run(
+        ["git", "-C", str(lab), "config", "user.email", f"{peer_id}@peerlab.local"],
+        check=False,
+    )
     subprocess.run(["git", "-C", str(lab), "add", "-A"], check=False)
     # Commit only if there's something staged
     diff_check = subprocess.run(
@@ -183,8 +233,12 @@ def ensure_peer_labs(state: PaircodeState) -> list[EnsureResult]:
         lab.mkdir(exist_ok=True)
         # Seed from project root (might be empty for greenfield — rsync handles fine)
         _rsync_project(project_root, lab)
+        # Drop peerlab-default .gitignore so peer commits don't pull in
+        # __pycache__, .pytest_cache, editor junk etc. Appends if the lab
+        # already inherited a .gitignore from the project root.
+        ensure_lab_gitignore(lab)
         _git_init(lab)
-        _git_initial_commit(lab, message="initial seed from project root")
+        _git_initial_commit(lab, pid, message="initial seed from project root")
         results.append(EnsureResult(peer_id=pid, lab_path=lab, status="created"))
     return results
 

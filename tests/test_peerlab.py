@@ -11,8 +11,10 @@ from click.testing import CliRunner
 from paircode.cli import main
 from paircode.handshake import ProposedPeer
 from paircode.peerlab import (
+    LAB_GITIGNORE_MARKER,
     PEERLAB_DIRNAME,
     ensure_gitignore,
+    ensure_lab_gitignore,
     ensure_peer_labs,
     peer_lab_path,
 )
@@ -175,6 +177,81 @@ def test_paircode_peerlab_help_is_reachable():
 # ---------------------------------------------------------------------------
 # Seed excludes honored
 # ---------------------------------------------------------------------------
+
+def test_lab_gitignore_has_pycache_on_fresh_lab(tmp_path, monkeypatch):
+    """Fresh lab's .gitignore excludes __pycache__ and bytecode so peer
+    commits don't pull in build junk. Regression for v0.12.0 bug where
+    `git add -A` in peer labs committed .pyc files."""
+    _init_and_scaffold(tmp_path, monkeypatch)
+    state = find_paircode()
+    ensure_peer_labs(state)
+    lab = peer_lab_path(state, "peer-a-codex")
+    gitignore = lab / ".gitignore"
+    assert gitignore.exists()
+    content = gitignore.read_text()
+    assert "__pycache__/" in content
+    assert "*.py[cod]" in content
+    assert LAB_GITIGNORE_MARKER in content
+
+
+def test_ensure_lab_gitignore_appends_to_existing(tmp_path):
+    """If user's project already has a .gitignore (rsync brought it over),
+    the peerlab block is APPENDED — user rules preserved."""
+    lab = tmp_path
+    (lab / ".gitignore").write_text("# user project rules\nsecrets.env\n")
+    assert ensure_lab_gitignore(lab) is True
+    content = (lab / ".gitignore").read_text()
+    assert "secrets.env" in content  # user rule preserved
+    assert LAB_GITIGNORE_MARKER in content  # our block added
+
+
+def test_ensure_lab_gitignore_is_idempotent(tmp_path):
+    """Second call no-ops if marker already there."""
+    lab = tmp_path
+    assert ensure_lab_gitignore(lab) is True
+    before = (lab / ".gitignore").read_text()
+    assert ensure_lab_gitignore(lab) is False
+    assert (lab / ".gitignore").read_text() == before
+
+
+def test_initial_commit_authored_as_peer_id(tmp_path, monkeypatch):
+    """Initial seed commit must be authored as the peer_id so replay
+    (git log) attributes work to each peer. Fixes v0.12.0 where commits
+    were authored as generic 'paircode-peerlab'."""
+    _init_and_scaffold(tmp_path, monkeypatch)
+    state = find_paircode()
+    ensure_peer_labs(state)
+    for pid in ("peer-a-codex", "peer-b-gemini"):
+        lab = peer_lab_path(state, pid)
+        r = subprocess.run(
+            ["git", "-C", str(lab), "log", "-1", "--format=%an <%ae>"],
+            capture_output=True, text=True, check=False,
+        )
+        assert pid in r.stdout, f"commit author should contain {pid}; got {r.stdout}"
+        assert f"{pid}@peerlab.local" in r.stdout
+
+
+def test_different_peers_produce_different_initial_commits(tmp_path, monkeypatch):
+    """Distinct peer_ids as commit authors mean the seed commit SHAs differ
+    across labs — proves independence beyond 'same content, same author,
+    accidental SHA collision'."""
+    _init_and_scaffold(tmp_path, monkeypatch)
+    state = find_paircode()
+    ensure_peer_labs(state)
+    codex_lab = peer_lab_path(state, "peer-a-codex")
+    gemini_lab = peer_lab_path(state, "peer-b-gemini")
+
+    def head_sha(lab):
+        r = subprocess.run(
+            ["git", "-C", str(lab), "rev-parse", "HEAD"],
+            capture_output=True, text=True, check=False,
+        )
+        return r.stdout.strip()
+
+    assert head_sha(codex_lab) != head_sha(gemini_lab), (
+        "initial seed commits should differ across labs since authors differ"
+    )
+
 
 def test_seed_excludes_dot_paircode_and_dot_git(tmp_path, monkeypatch):
     """Seeded labs must not contain `.paircode/` (recursion) or the outer
