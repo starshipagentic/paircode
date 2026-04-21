@@ -243,7 +243,7 @@ def converge(stage: str) -> None:
     Runs on the active focus. Mechanical file-copy only; the slash command
     writes `consensus.md` afterward from the FINAL files.
     """
-    from paircode.seal import seal_stage
+    from paircode.converge import seal_stage
 
     state = find_paircode()
     if state is None or state.active_focus is None:

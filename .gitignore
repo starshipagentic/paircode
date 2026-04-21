@@ -35,3 +35,6 @@ ENV/
 /tmp/
 scratch/
 dist/
+
+# paircode runtime state (focuses, peer workspaces, etc.)
+.paircode/

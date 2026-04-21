@@ -1,9 +1,9 @@
-"""Tests for stage sealing."""
+"""Tests for stage convergence — copying latest vN to *-FINAL.md."""
 from __future__ import annotations
 
 from pathlib import Path
 
-from paircode.seal import discover_latest_versions, seal_stage
+from paircode.converge import discover_latest_versions, seal_stage
 
 
 def test_discover_latest_versions_picks_highest_per_peer(tmp_path: Path):

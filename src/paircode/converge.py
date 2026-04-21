@@ -1,8 +1,12 @@
-"""Seal a stage — copy the latest version per peer to {peer}-FINAL.md.
+"""Converge a stage — copy the latest version per peer to {peer}-FINAL.md.
 
-Sealing is the declarative exit signal for a stage. Once alpha-FINAL.md and
-each peer's *-FINAL.md exist, the stage is considered complete and the next
-stage can consume its outputs.
+Convergence is the declarative exit signal for a stage. Once alpha-FINAL.md
+and each peer's *-FINAL.md exist, the stage is considered complete and the
+next stage can consume its outputs.
+
+Renamed from `seal.py` in v0.11.1 to match the user-facing CLI verb
+(`paircode converge <stage>`). The public function name stayed `seal_stage`
+because it describes a file-copy primitive, not the user-level action.
 """
 from __future__ import annotations
 

@@ -22,12 +22,12 @@ Also cleans up legacy files from pre-v0.10 paircode versions on every install.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from importlib import resources
 from pathlib import Path
 
 from cliworker import invoke
 
 from paircode.detect import detect_all, CliInfo
+from paircode.util import read_template as _read_template
 
 
 # Satellite repo coordinates — update here when repos move.
@@ -44,15 +44,6 @@ class InstallResult:
     action: str  # "installed", "skipped", "failed", "noop", "already"
     path: Path | None
     message: str
-
-
-def _read_template(relative_path: str) -> str:
-    """Read a file under `paircode/templates/` by relative path.
-
-    Host templates live at `<host>/commands/...`, host-agnostic scaffold
-    templates at the root (`FOCUS.md`, `JOURNEY.md`, `peers.yaml`).
-    """
-    return resources.files("paircode.templates").joinpath(relative_path).read_text(encoding="utf-8")
 
 
 # ---------------------------------------------------------------------------

@@ -18,11 +18,12 @@ from __future__ import annotations
 import datetime as _dt
 import re
 from dataclasses import dataclass
-from importlib import resources
 from pathlib import Path
 from typing import Iterable
 
 import yaml
+
+from paircode.util import read_template as _read_template
 
 
 PAIRCODE_DIRNAME = ".paircode"
@@ -33,15 +34,6 @@ FOCUS_FILE = "FOCUS.md"
 
 def _now_iso() -> str:
     return _dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-
-def _read_template(relative_path: str) -> str:
-    """Read a file under `paircode/templates/` by relative path.
-
-    Examples: `_read_template("FOCUS.md")` or
-    `_read_template("claude/commands/paircode.md")`.
-    """
-    return resources.files("paircode.templates").joinpath(relative_path).read_text(encoding="utf-8")
 
 
 def _render(template: str, vars: dict[str, str]) -> str:
