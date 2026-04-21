@@ -48,9 +48,9 @@ your-project/
   .paircode/
     JOURNEY.md                    # fleet log
     peers.yaml                    # roster: who's on the team
-    peers/
+    sandbox/
       peer-a-codex/               # codex's persistent sandbox (code goes here)
-      peer-b-gemini/               # gemini's persistent sandbox
+      peer-b-gemini/              # gemini's persistent sandbox
     focus-01-<slug>/
       FOCUS.md                    # this focus's prompt + metadata
       research/
@@ -69,7 +69,7 @@ your-project/
 
 **Code vs. reports.** Files inside `focus-*/` are markdown *reports* (opinions, plans, critiques, summaries of work). Actual code lives elsewhere:
 
-- **Peers** code in their sandboxed workspaces at `.paircode/peers/<peer-id>/` — persistent across focuses.
+- **Peers** code in their sandboxed workspaces at `.paircode/sandbox/<peer-id>/` — persistent across focuses.
 - **Alpha** codes directly in the project root (the real repo) — alpha *is* the project.
 
 ## Stages

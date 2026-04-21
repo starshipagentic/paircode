@@ -4,9 +4,9 @@ The .paircode/ layout (from diary/001-step-a-architecture.md):
 
   .paircode/
     JOURNEY.md              ← fleet log, focus transitions
-    peers.yaml              ← roster
-    peers/
-      peer-a-{cli}/         ← per-peer working dir (+profile.md, +code if full-fork)
+    peers.yaml              ← roster (who's on the team)
+    sandbox/
+      peer-a-{cli}/         ← per-peer persistent sandbox (code/scripts/prototypes)
     focus-01-{slug}/
       FOCUS.md
       research/
@@ -53,7 +53,7 @@ class PaircodeState:
     root: Path                       # path to .paircode/ dir itself
     journey_path: Path
     peers_path: Path
-    peers_dir: Path
+    sandbox_dir: Path
     focus_dirs: list[Path]           # sorted by name
 
     @property
@@ -90,7 +90,7 @@ def load_state(root: Path) -> PaircodeState:
         root=root,
         journey_path=root / JOURNEY_FILE,
         peers_path=root / PEERS_FILE,
-        peers_dir=root / "peers",
+        sandbox_dir=root / "sandbox",
         focus_dirs=focus_dirs,
     )
 
@@ -109,19 +109,19 @@ def _peer_id(entry) -> str | None:
 
 
 def ensure_peer_dirs(state: PaircodeState, proposed: Iterable) -> list[Path]:
-    """Create .paircode/peers/{peer.id}/ for each entry. Idempotent.
+    """Create .paircode/sandbox/{peer.id}/ for each entry. Idempotent.
 
     Accepts iterables of ProposedPeer dataclasses OR plain dicts (anything
     with an `id` attribute / key). Silently skips entries without a usable id.
-    Returns the list of peer-dir paths that now exist (created or pre-existing).
+    Returns the list of sandbox-dir paths that now exist (created or pre-existing).
     """
-    state.peers_dir.mkdir(exist_ok=True)
+    state.sandbox_dir.mkdir(exist_ok=True)
     created: list[Path] = []
     for entry in proposed:
         pid = _peer_id(entry)
         if not pid:
             continue
-        peer_dir = state.peers_dir / pid
+        peer_dir = state.sandbox_dir / pid
         peer_dir.mkdir(exist_ok=True)
         created.append(peer_dir)
     return created
@@ -130,7 +130,7 @@ def ensure_peer_dirs(state: PaircodeState, proposed: Iterable) -> list[Path]:
 def init_paircode(project_root: Path | None = None, force: bool = False) -> PaircodeState:
     """Bootstrap .paircode/ in `project_root` (or cwd). Returns the new state.
 
-    Also pre-creates a subdir per auto-detected peer under .paircode/peers/.
+    Also pre-creates a subdir per auto-detected peer under .paircode/sandbox/.
     If no peers are detected, the parent dir exists but stays empty.
     """
     if project_root is None:
@@ -142,7 +142,7 @@ def init_paircode(project_root: Path | None = None, force: bool = False) -> Pair
             f"{root} already exists. Use --force to overwrite, or `paircode status` to inspect."
         )
     root.mkdir(parents=True, exist_ok=True)
-    (root / "peers").mkdir(exist_ok=True)
+    (root / "sandbox").mkdir(exist_ok=True)
 
     journey = _render(
         _read_template("JOURNEY.md"),
@@ -162,8 +162,8 @@ def init_paircode(project_root: Path | None = None, force: bool = False) -> Pair
 
         ensure_peer_dirs(state, propose_roster())
     except Exception:
-        # Scaffolding peers is best-effort; a detect failure shouldn't
-        # block bootstrap. The peers/ parent dir is already there.
+        # Scaffolding sandboxes is best-effort; a detect failure shouldn't
+        # block bootstrap. The sandbox/ parent dir is already there.
         pass
 
     return state

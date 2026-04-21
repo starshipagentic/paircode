@@ -5,7 +5,7 @@
 # project root.
 #
 # Every other LLM that participates is a peer. Each peer gets an entry
-# below AND a folder at .paircode/peers/peer-N-{cli}/.
+# below AND a folder at .paircode/sandbox/peer-N-{cli}/.
 #
 # Fields:
 #   id              — peer-a, peer-b, peer-c, ... (unique, immutable)

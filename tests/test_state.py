@@ -22,13 +22,13 @@ def test_init_creates_paircode_structure(tmp_path: Path):
     assert state.root.is_dir()
     assert state.journey_path.exists()
     assert state.peers_path.exists()
-    assert state.peers_dir.is_dir()
+    assert state.sandbox_dir.is_dir()
     assert state.focus_count == 0
     assert state.active_focus is None
 
 
 def test_init_scaffolds_peer_dirs_from_detected_clis(tmp_path: Path, monkeypatch):
-    """init_paircode should create .paircode/peers/{id}/ for each detected peer."""
+    """init_paircode should create .paircode/sandbox/{id}/ for each detected peer."""
     fake_proposed = [
         ProposedPeer(id="peer-a-codex", cli="codex", priority="high", notes=""),
         ProposedPeer(id="peer-b-gemini", cli="gemini", priority="low", notes=""),
@@ -36,15 +36,15 @@ def test_init_scaffolds_peer_dirs_from_detected_clis(tmp_path: Path, monkeypatch
     monkeypatch.setattr("paircode.handshake.propose_roster", lambda: fake_proposed)
 
     state = init_paircode(tmp_path)
-    assert (state.peers_dir / "peer-a-codex").is_dir()
-    assert (state.peers_dir / "peer-b-gemini").is_dir()
+    assert (state.sandbox_dir / "peer-a-codex").is_dir()
+    assert (state.sandbox_dir / "peer-b-gemini").is_dir()
 
 
-def test_init_with_no_detected_peers_leaves_peers_dir_empty(tmp_path: Path, monkeypatch):
+def test_init_with_no_detected_peers_leaves_sandbox_dir_empty(tmp_path: Path, monkeypatch):
     monkeypatch.setattr("paircode.handshake.propose_roster", lambda: [])
     state = init_paircode(tmp_path)
-    assert state.peers_dir.is_dir()
-    assert list(state.peers_dir.iterdir()) == []
+    assert state.sandbox_dir.is_dir()
+    assert list(state.sandbox_dir.iterdir()) == []
 
 
 def test_ensure_peer_dirs_accepts_dicts_and_is_idempotent(tmp_path: Path, monkeypatch):
@@ -54,7 +54,7 @@ def test_ensure_peer_dirs_accepts_dicts_and_is_idempotent(tmp_path: Path, monkey
     dicts = [{"id": "peer-a-codex", "cli": "codex"}, {"id": "peer-c-ollama"}]
     created = ensure_peer_dirs(state, dicts)
     assert len(created) == 2
-    assert (state.peers_dir / "peer-a-codex").is_dir()
+    assert (state.sandbox_dir / "peer-a-codex").is_dir()
     # Running again is a no-op (idempotent)
     created_again = ensure_peer_dirs(state, dicts)
     assert len(created_again) == 2

@@ -21,7 +21,7 @@ Inside every `$FOCUS/{stage}/`:
 
 **Code vs. reports.** Every file inside `$FOCUS/{stage}/` is a **markdown report** (opinion, critique, plan, or summary of work). Actual code lives elsewhere:
 
-- **Peers** code in their sandboxed workspace at `.paircode/peers/{peer-id}/` — persistent across focuses.
+- **Peers** code in their sandboxed workspace at `.paircode/sandbox/{peer-id}/` — persistent across focuses.
 - **Alpha** codes directly in the project root (the user's repo) — alpha IS the project, no sandbox.
 
 The `$FOCUS/execute/*-v1.md` files describe what was done; the `$FOCUS/execute/` dir is never where code is written.
@@ -77,14 +77,14 @@ Construct one per stage — keep it reusable across peers:
 
 - **research**: "Read $FOCUS/FOCUS.md. Give an honest, skeptical, specific **cold take** on the prompt. Clean markdown, no preamble."
 - **plan**: "Read $FOCUS/FOCUS.md and any `../research/*-FINAL.md` if present. Write a **concrete step-by-step plan** for this prompt: goal, scope, numbered steps, risks, success criteria. Be KISS. Clean markdown."
-- **execute**: "Read $FOCUS/FOCUS.md and the plan at `$FOCUS/plan/*-FINAL.md`. **Execute the plan IN YOUR PEER WORKSPACE at `.paircode/peers/{peer-id}/`** — that is your persistent sandbox. Write code there, run commands there. Do NOT touch files outside that workspace. Then write a markdown report to your output file summarizing: what you built, files touched (paths relative to your peer workspace), tests/verification status, what's open. The output file holds the *report*; the *code* lives in your peer workspace."
+- **execute**: "Read $FOCUS/FOCUS.md and the plan at `$FOCUS/plan/*-FINAL.md`. **Execute the plan IN YOUR PEER WORKSPACE at `.paircode/sandbox/{peer-id}/`** — that is your persistent sandbox. Write code there, run commands there. Do NOT touch files outside that workspace. Then write a markdown report to your output file summarizing: what you built, files touched (paths relative to your peer workspace), tests/verification status, what's open. The output file holds the *report*; the *code* lives in your peer workspace."
 - **ask**: "Read $FOCUS/FOCUS.md and the artifact it points to. Give your **honest critique** — severity-ranked findings with file:line citations where possible. Clean markdown, no preamble."
 
 ## Step 4 — Team lead's own take
 
 After the serial peer loop completes (or right after you kick it off if your tools allow), write your own v1 at `$FOCUS/{stage}/alpha-v1.md` using the shell tool (e.g. `cat > ... <<'EOF'`). Same stage-appropriate rules as above — your advantage over the peers is session context (memory, recent work, the maintainer's voice).
 
-**Execute-stage asymmetry:** when `{stage}` is `execute`, peers code inside their sandboxed peer workspaces (`.paircode/peers/{peer-id}/`). You, alpha, code directly in the project root — the user's actual repo. Your `alpha-v1.md` is a report summarizing what landed in the real project files; the code itself lives in the repo, not in `$FOCUS/execute/`.
+**Execute-stage asymmetry:** when `{stage}` is `execute`, peers code inside their sandboxed peer workspaces (`.paircode/sandbox/{peer-id}/`). You, alpha, code directly in the project root — the user's actual repo. Your `alpha-v1.md` is a report summarizing what landed in the real project files; the code itself lives in the repo, not in `$FOCUS/execute/`.
 
 ## Step 5 — Wait and read
 

@@ -107,8 +107,14 @@ def run_peer(
         f"<!-- cli: {cli} -->\n"
         f"<!-- model: {model or '(default)'} -->\n"
         f"<!-- duration_s: {cli_result.duration_s:.1f} -->\n"
-        f"<!-- ok: {cli_result.ok} -->\n\n"
+        f"<!-- ok: {cli_result.ok} -->\n"
     )
+    # Surface the cliworker watchdog's reason on failure so downstream tools
+    # can tell startup-idle hangs apart from hard timeouts apart from real errors.
+    timeout_kind = getattr(cli_result, "timeout_kind", None)
+    if timeout_kind:
+        header += f"<!-- timeout_kind: {timeout_kind} -->\n"
+    header += "\n"
     if cli_result.ok:
         body = cli_result.stdout
     else:

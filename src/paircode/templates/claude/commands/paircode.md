@@ -18,12 +18,11 @@ Inside every `$FOCUS/{stage}/`:
 
 `N` in `vN` is the current round number, starting at 1. Only write v1 in the first round; bump to v2, v3, … if you do review rounds.
 
-**Code vs. reports.** Every file inside `$FOCUS/{stage}/` is a **markdown report** (opinion, critique, plan, or summary of work). Actual code lives elsewhere:
+**Reports vs. code — the three rules.** Files inside `$FOCUS/{stage}/` are always **markdown reports** (opinions, plans, critiques, summaries). Actual code lives elsewhere, and sandboxes are **always available, never required**:
 
-- **Peers** code in their sandboxed workspace at `.paircode/peers/{peer-id}/` — persistent across focuses, each peer builds there.
-- **Alpha** codes directly in the project root (the user's repo) — alpha IS the project, no sandbox.
-
-The `$FOCUS/execute/*-v1.md` files describe what was done; the `$FOCUS/execute/` dir is never where code is written.
+1. **Always available.** Peers can use their persistent sandbox at `.paircode/sandbox/{peer-id}/` at **any stage** — not just execute. Verifying a bug in `ask`, grounding research in real data, prototyping a tricky plan section — all fine. Alpha (this Claude session) works directly in the project root (the user's repo). **Code only when it makes your answer materially better** — a 5-line verification script is cheap insurance; a 500-line prototype during an `ask` is over-engineering.
+2. **Separation.** Markdown is the deliverable; the sandbox is the laboratory. Scripts, prototypes, dumps, evidence files live in `.paircode/sandbox/{peer-id}/`. The `$FOCUS/{stage}/*-v1.md` file summarizes what you did + what it proved. The `$FOCUS/` tree is never where code is written.
+3. **Isolation.** Peers never touch files outside their own sandbox. Alpha never touches other peers' sandboxes. The project root is alpha's.
 
 ## Step 1 — Bootstrap
 
@@ -44,34 +43,41 @@ PEERS=$(paircode roster --alpha claude <user's --peer/--peers flags if any>)
 
 `paircode roster` always returns a usable list. Trust it.
 
-## Step 2 — Pick the stage
+## Step 2 — Pick the flow (not just a stage)
 
-Read the user's quoted prompt and decide which stage best fits. Store your pick as `{stage}`:
+Read the user's quoted prompt and pick the **whole flow** you're committing to. Store it as `{flow}`. Each flow is an ordered list of stages; you run them in order.
 
-- **research** — explore new ground, figure something out. ("build a KISS PHQ-9 depression engine", "find the right TTS library", "how should we approach X")
-- **plan** — produce a concrete implementation plan, usually building on prior research. ("plan the refactor based on focus-02's research")
-- **execute** — do the work from an existing plan. ("execute the plan at focus-02")
-- **ask** — get opinions on existing work. ("what does codex think of this PR", "review my approach at <path>")
+| Flow | Deliverable | Trigger phrases |
+|---|---|---|
+| `ask` | Opinion on existing work | "what do you think", "review X", "critique", "second opinion" |
+| `research` | Investigation report | "figure out", "explore", "find the right", "how should we" |
+| `research → plan` | Concrete plan | "plan the X", "design the Y", "lay out the approach" |
+| `research → plan → execute` | **Shipped code / action done** | "build", "fix", "implement", "write code for", "ship", "do", and most imperative tasks |
+| `execute` | Just do it (plan already exists) | "execute the plan at focus-NN", "run the migration from focus-05" |
 
-When unsure, pick `research` — it's the safe cold-investigation default. All four stage subdirs already exist under `$FOCUS` — no mkdir needed.
+**Default when ambiguous: `research → plan → execute`.** It's safer to over-deliver than to stop at research for a prompt that meant "build this." The only prompts that aren't build-shaped are explicit opinion/review requests.
+
+Write `{flow}` into `$FOCUS/FOCUS.md` (append a line like `flow: research → plan → execute`) so later steps can see your commitment.
+
+The stage for **this iteration** is the first stage in `{flow}`. Store that as `{stage}`. All four stage subdirs already exist under `$FOCUS`.
 
 ## Step 3 — Fire peers in parallel
 
 For each peer id in `$PEERS`, spawn one subagent using the **Agent tool** with `subagent_type=general-purpose` and `run_in_background=true`. Send them all in a single message so they run truly concurrently.
 
-Construct a stage-appropriate peer prompt. The general shape for each `{stage}`:
+Construct a stage-appropriate peer prompt. Every prompt reminds the peer its sandbox is available; the deliverable is always the markdown report. General shape for each `{stage}`:
 
-- **research**: "Read $FOCUS/FOCUS.md. Give an honest, skeptical, specific **cold take** on the prompt. Clean markdown, no preamble."
-- **plan**: "Read $FOCUS/FOCUS.md and any `../research/*-FINAL.md` if present. Write a **concrete step-by-step plan** for this prompt: goal, scope, numbered steps, risks, success criteria. Be KISS. Clean markdown."
-- **execute**: "Read $FOCUS/FOCUS.md and the plan at `$FOCUS/plan/*-FINAL.md`. **Execute the plan IN YOUR PEER WORKSPACE at `.paircode/peers/{peer-id}/`** — that is your persistent sandbox. Write code there, run commands there. Do NOT touch files outside that workspace. Then write a markdown report to your output file summarizing: what you built, files touched (paths relative to your peer workspace), tests/verification status, what's open. The output file holds the *report*; the *code* lives in your peer workspace."
-- **ask**: "Read $FOCUS/FOCUS.md and the artifact it points to. Give your **honest critique** of that artifact — what's wrong, what's right, severity-ranked findings with file:line citations where possible. Clean markdown, no preamble."
+- **research**: "Read $FOCUS/FOCUS.md. Give an honest, skeptical, specific **cold take** on the prompt. Use your sandbox at `.paircode/sandbox/{peer-id}/` to write quick scripts grounding your claims in real data (not README marketing) if it would sharpen your take. Clean markdown report, no preamble."
+- **plan**: "Read $FOCUS/FOCUS.md and any `../research/*-FINAL.md` if present. Write a **concrete step-by-step plan**: goal, scope, numbered steps, risks, success criteria. Be KISS. Use your sandbox at `.paircode/sandbox/{peer-id}/` to prototype tricky sections and verify feasibility. Clean markdown."
+- **execute**: "Read $FOCUS/FOCUS.md and the plan at `$FOCUS/plan/*-FINAL.md`. **Carry out the plan and produce working artifacts.** For code-shipping plans: work in your peer workspace at `.paircode/sandbox/{peer-id}/`, write code there, run commands there, run tests there. For action plans (run a migration, make an API call, file a ticket): do the action and report results. Do NOT touch files outside your workspace. Your output is a markdown report summarizing what you built/ran, files touched, verification status, what's open."
+- **ask**: "Read $FOCUS/FOCUS.md and the artifact it points to. Give your **honest critique** — severity-ranked findings with file:line citations where possible. If reproducing a claim by running a quick script in your sandbox (`.paircode/sandbox/{peer-id}/`) would make your critique sharper, do it. Your output is still a critique report, not a prototype. Clean markdown, no preamble."
 
 Each subagent's prompt:
 
 ```
 You are the {peer-id} peer in a paircode {stage} cycle.
 
-Your persistent workspace: .paircode/peers/{peer-id}/
+Your persistent workspace: .paircode/sandbox/{peer-id}/
 The focus we're on: $FOCUS
 The prompt from the user: "<the quoted prompt>"
 The stage: {stage}
@@ -93,7 +99,7 @@ Do not try to "fix" the peer's output. We want the raw file-trace on disk.
 
 While the peer subagents run, you (the team lead) write your own v1 at `$FOCUS/{stage}/alpha-v1.md`. Use the Write tool. Same stage-appropriate rules as above — and your advantage over the peers is you have this session's full context (memory, recent work, the maintainer's voice).
 
-**Execute-stage asymmetry:** when `{stage}` is `execute`, peers code inside their sandboxed peer workspaces (`.paircode/peers/{peer-id}/`). You, alpha, code directly in the project root — you're working on the user's actual repo. Your `alpha-v1.md` is a report summarizing what landed in the real project files; the code itself lives in the repo, not in `$FOCUS/execute/`.
+**Execute-stage asymmetry:** when `{stage}` is `execute`, peers code inside their sandboxed peer workspaces (`.paircode/sandbox/{peer-id}/`). You, alpha, code directly in the project root — you're working on the user's actual repo. Your `alpha-v1.md` is a report summarizing what landed in the real project files; the code itself lives in the repo, not in `$FOCUS/execute/`.
 
 ## Step 5 — Wait and read
 
@@ -136,20 +142,13 @@ Then read every `*-FINAL.md` and write `$FOCUS/{stage}/consensus.md` via the Wri
 
 Adversarial-but-honest. No pile-on. No rubber-stamping either.
 
-## Step 8 — Next stage or done?
+## Step 8 — Advance the flow (mechanical)
 
-After a stage converges, decide whether to transition to another stage or wrap up:
+Look at the `{flow}` you committed to in Step 2. Set `{stage}` to the **next** stage in that flow and jump back to **Step 3** (Fire peers). Skip Step 1 (focus is still open) and Step 2 (flow already chosen). The previous stage's `*-FINAL.md` files are input for the next stage's peer prompts.
 
-- **Done** — the user's prompt is now served. Go to Step 9.
-- **Next stage** — move to whichever stage follows naturally from what you just finished. Pick the new `{stage}`, then jump back to **Step 3** (Fire peers). Skip Step 1 — focus is still open. Skip Step 2 — you already picked. The previous stage's `*-FINAL.md` files are input for the next stage's peer prompts.
+**If the last stage just finished, go to Step 9.**
 
-Typical chains:
-- `ask → done`
-- `research → done` (if research itself was the deliverable)
-- `research → plan → execute → done` (most common full-build chain)
-- `research → plan → done` (when the plan is the deliverable and the maintainer will execute manually)
-
-Back-to-Step-3 recursion is how paircode moves through multiple stages in one invocation. No round cap, no stage cap — team lead's call when to stop.
+This step is mechanical. Do not re-deliberate. Do not ask the user whether to continue. The user's prompt in `$ARGUMENTS` was implicit go-ahead for the whole flow; stopping early is an exception that only happens if **something blocked you** (a peer hard-errored and the blocker is critical, the consensus explicitly said "do not proceed", or the user interrupted). If you do stop early, say so explicitly in the final report with the reason.
 
 ## Step 9 — Final report
 
@@ -166,4 +165,6 @@ Keep it under 200 words. Brief, honest, actionable.
 - **Never skip Step 1.** The focus and roster helpers do the work Python is better at.
 - **Never invent peer commands.** Always route through `paircode invoke <id> "..." --out <path>` — that's how cliworker's speed flags, MCP strip, and output tracing work.
 - **Never pass the interactive Claude session as a peer by mistake.** `paircode roster --alpha claude` handles that for you.
+- **Peer sandboxes are always available, never required.** Use them when it materially sharpens your answer, not by default.
+- **The user's prompt is implicit go-ahead for the whole `{flow}`.** Do not pause for permission between stages. If you must stop early, say so explicitly in the final report with the reason.
 - **No AI attribution** in any artifact you write (consensus.md, alpha-*.md). See the maintainer's CLAUDE.md.
