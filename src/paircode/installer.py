@@ -46,8 +46,13 @@ class InstallResult:
     message: str
 
 
-def _read_template(name: str) -> str:
-    return resources.files("paircode.templates").joinpath(name).read_text(encoding="utf-8")
+def _read_template(relative_path: str) -> str:
+    """Read a file under `paircode/templates/` by relative path.
+
+    Host templates live at `<host>/commands/...`, host-agnostic scaffold
+    templates at the root (`FOCUS.md`, `JOURNEY.md`, `peers.yaml`).
+    """
+    return resources.files("paircode.templates").joinpath(relative_path).read_text(encoding="utf-8")
 
 
 # ---------------------------------------------------------------------------
@@ -55,12 +60,11 @@ def _read_template(name: str) -> str:
 # ---------------------------------------------------------------------------
 
 def install_claude(info: CliInfo) -> InstallResult:
-    """Write ~/.claude/commands/paircode.md AND ~/.claude/agents/paircode-peer.md.
+    """Write ~/.claude/commands/paircode.md — file-drop (native for Claude Code).
 
-    Arch B uses Claude's Agent Teams: the team-lead slash command spawns
-    `Agent(name: "paircode-peer", ...)` members that shell out via `paircode
-    invoke`. The sub-agent definition file is required for those spawns to
-    resolve, so we write both in the same step.
+    The template uses Claude's stock Agent tool (subagent_type=general-purpose,
+    run_in_background=true) to fan out peer reviewers — no custom sub-agent
+    definition file required.
     """
     if not info.installed:
         return InstallResult(
@@ -69,17 +73,14 @@ def install_claude(info: CliInfo) -> InstallResult:
         )
     commands_dir = info.config_dir / "commands"
     commands_dir.mkdir(parents=True, exist_ok=True)
-    cmd_target = commands_dir / "paircode.md"
-    cmd_target.write_text(_read_template("claude_slash_command.md"), encoding="utf-8")
-
-    agents_dir = info.config_dir / "agents"
-    agents_dir.mkdir(parents=True, exist_ok=True)
-    agent_target = agents_dir / "paircode-peer.md"
-    agent_target.write_text(_read_template("claude_peer_agent.md"), encoding="utf-8")
-
+    target = commands_dir / "paircode.md"
+    target.write_text(
+        _read_template("claude/commands/paircode.md"),
+        encoding="utf-8",
+    )
     return InstallResult(
-        cli_name="claude", action="installed", path=cmd_target,
-        message=f"Wrote /paircode to {cmd_target} + paircode-peer agent to {agent_target}.",
+        cli_name="claude", action="installed", path=target,
+        message=f"Wrote /paircode slash command to {target}.",
     )
 
 

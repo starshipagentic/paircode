@@ -90,7 +90,7 @@ CODEX_REPO = Repo(
         ),
     ],
     template_syncs=[
-        ("src/paircode/templates/codex_slash_command.md",
+        ("src/paircode/templates/codex/commands/paircode.md",
          "plugins/paircode/commands/paircode.md"),
     ],
     commit_msg_prefix="sync to paircode",
@@ -108,7 +108,7 @@ GEMINI_REPO = Repo(
         ),
     ],
     template_syncs=[
-        ("src/paircode/templates/gemini_slash_command.toml",
+        ("src/paircode/templates/gemini/commands/paircode.toml",
          "commands/paircode.toml"),
     ],
     commit_msg_prefix="sync to paircode",

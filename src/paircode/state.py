@@ -35,8 +35,13 @@ def _now_iso() -> str:
     return _dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
-def _read_template(name: str) -> str:
-    return resources.files("paircode.templates").joinpath(name).read_text(encoding="utf-8")
+def _read_template(relative_path: str) -> str:
+    """Read a file under `paircode/templates/` by relative path.
+
+    Examples: `_read_template("FOCUS.md")` or
+    `_read_template("claude/commands/paircode.md")`.
+    """
+    return resources.files("paircode.templates").joinpath(relative_path).read_text(encoding="utf-8")
 
 
 def _render(template: str, vars: dict[str, str]) -> str:
@@ -180,10 +185,9 @@ def open_focus(state: PaircodeState, name: str, prompt: str | None = None) -> Pa
     if focus_dir.exists():
         raise FileExistsError(f"{focus_dir} already exists")
     focus_dir.mkdir()
-    for stage in ("research", "plan", "execute"):
+    for stage in ("research", "plan", "execute", "ask"):
         (focus_dir / stage).mkdir()
-    (focus_dir / "research" / "reviews").mkdir()
-    (focus_dir / "plan" / "reviews").mkdir()
+        (focus_dir / stage / "reviews").mkdir()
 
     focus_md = _render(
         _read_template("FOCUS.md"),

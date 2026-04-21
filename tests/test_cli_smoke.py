@@ -35,6 +35,7 @@ from paircode.cli import main
         ["focus", "active", "--help"],
         ["roster", "--help"],
         ["invoke", "--help"],
+        ["converge", "--help"],
     ],
 )
 def test_every_command_help_is_reachable(cmd_argv):
@@ -51,7 +52,7 @@ def test_main_help_lists_all_public_subcommands():
     result = runner.invoke(main, ["--help"])
     assert result.exit_code == 0
     for cmd in ("install", "uninstall", "ensure-scaffold",
-                "focus", "roster", "invoke"):
+                "focus", "roster", "invoke", "converge"):
         assert cmd in result.output, f"Main --help missing subcommand: {cmd}"
 
 
@@ -197,6 +198,64 @@ def test_roster_prints_peer_ids(tmp_path, monkeypatch):
     assert "peer-b-gemini" in lines
 
 
+def test_roster_alpha_excludes_matching_cli(tmp_path, monkeypatch):
+    """`roster --alpha codex` excludes codex-cli peers unless they're the only option."""
+    monkeypatch.chdir(tmp_path)
+    from paircode.handshake import ProposedPeer
+    peers = [
+        ProposedPeer(id="peer-a-codex", cli="codex", priority="high", notes=""),
+        ProposedPeer(id="peer-b-gemini", cli="gemini", priority="low", notes=""),
+    ]
+    monkeypatch.setattr("paircode.cli.propose_roster", lambda: peers)
+    runner = CliRunner()
+    runner.invoke(main, ["ensure-scaffold"])
+    result = runner.invoke(main, ["roster", "--alpha", "codex"])
+    assert result.exit_code == 0, result.output
+    lines = result.output.strip().splitlines()
+    assert "peer-a-codex" not in lines
+    assert "peer-b-gemini" in lines
+
+
+def test_roster_missing_peer_falls_back_silently(tmp_path, monkeypatch):
+    """`--peer gemini` when gemini isn't in the roster falls back to all peers,
+    never errors."""
+    monkeypatch.chdir(tmp_path)
+    from paircode.handshake import ProposedPeer
+    peers = [
+        ProposedPeer(id="peer-a-codex", cli="codex", priority="high", notes=""),
+    ]
+    monkeypatch.setattr("paircode.cli.propose_roster", lambda: peers)
+    runner = CliRunner()
+    runner.invoke(main, ["ensure-scaffold"])
+    result = runner.invoke(main, ["roster", "--peer", "peer-z-gemini"])
+    assert result.exit_code == 0, result.output
+    # Silent fallback — codex shows up because it's all we've got
+    lines = result.output.strip().splitlines()
+    assert "peer-a-codex" in lines
+
+
+def test_roster_last_resort_includes_alpha_when_nothing_else(tmp_path, monkeypatch):
+    """If --alpha claude is set but only claude is in the roster, claude still
+    gets included — last-resort rule."""
+    monkeypatch.chdir(tmp_path)
+    from paircode.handshake import ProposedPeer
+    # Stub out propose_roster so the re-detection step finds nothing new
+    monkeypatch.setattr("paircode.cli.propose_roster", lambda: [])
+    runner = CliRunner()
+    runner.invoke(main, ["ensure-scaffold"])
+    # Seed a claude-only roster manually
+    from paircode.state import find_paircode, write_peers
+    state = find_paircode()
+    write_peers(state, [{"id": "peer-a-claude", "cli": "claude", "priority": "low"}])
+
+    result = runner.invoke(main, ["roster", "--alpha", "claude"])
+    assert result.exit_code == 0, result.output
+    lines = result.output.strip().splitlines()
+    assert "peer-a-claude" in lines, (
+        "Claude should be last-resort peer when nothing else is available"
+    )
+
+
 # ---------------------------------------------------------------------------
 # invoke — the team-lead's peer-firing helper
 # ---------------------------------------------------------------------------
@@ -255,6 +314,40 @@ def test_invoke_calls_run_peer_and_writes_trace(tmp_path, monkeypatch):
     assert captured["prompt"] == "what is TCP?"
     assert captured["output_path"] == out_file
     assert out_file.exists()
+
+
+def test_converge_copies_latest_vn_to_final(tmp_path, monkeypatch):
+    """`paircode converge <stage>` copies each peer's (and alpha's) latest vN
+    to {id}-FINAL.md. Mechanical replacement for the template's bash loop."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("paircode.cli.propose_roster", lambda: [])
+    runner = CliRunner()
+    runner.invoke(main, ["ensure-scaffold"])
+    focus_out = runner.invoke(main, ["focus", "new", "testfocus"])
+    focus_dir = Path(focus_out.output.strip())
+
+    research = focus_dir / "research"
+    (research / "alpha-v1.md").write_text("alpha round 1", encoding="utf-8")
+    (research / "alpha-v2.md").write_text("alpha round 2", encoding="utf-8")
+    (research / "peer-a-codex-v1.md").write_text("codex round 1", encoding="utf-8")
+
+    result = runner.invoke(main, ["converge", "research"])
+    assert result.exit_code == 0, result.output
+
+    assert (research / "alpha-FINAL.md").exists()
+    assert (research / "peer-a-codex-FINAL.md").exists()
+    # FINAL pulls the highest vN for alpha
+    assert (research / "alpha-FINAL.md").read_text() == "alpha round 2"
+
+
+def test_converge_without_focus_errors(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("paircode.cli.propose_roster", lambda: [])
+    runner = CliRunner()
+    runner.invoke(main, ["ensure-scaffold"])
+    result = runner.invoke(main, ["converge", "research"])
+    assert result.exit_code != 0
+    assert "focus" in result.output.lower()
 
 
 def test_invoke_failure_exits_nonzero(tmp_path, monkeypatch):
@@ -451,9 +544,9 @@ def test_installer_codex_calls_marketplace_add_via_invoke(tmp_path, monkeypatch)
     assert not (fake_home / ".codex" / "rules" / "paircode.rules").exists()
 
 
-def test_installer_claude_writes_slash_command_and_peer_agent(tmp_path, monkeypatch):
-    """Arch B: install_claude must drop BOTH the slash command and the
-    paircode-peer sub-agent definition, or the team-lead Agent() spawn fails."""
+def test_installer_claude_writes_slash_command(tmp_path, monkeypatch):
+    """install_claude drops the /paircode slash command. Simple-path template
+    uses stock Agent tool subagents — no custom sub-agent definition needed."""
     fake_home = tmp_path / "home"
     fake_home.mkdir()
     monkeypatch.setenv("HOME", str(fake_home))
@@ -474,9 +567,10 @@ def test_installer_claude_writes_slash_command_and_peer_agent(tmp_path, monkeypa
     assert actions["claude"] == "installed"
 
     slash_cmd = fake_home / ".claude" / "commands" / "paircode.md"
-    peer_agent = fake_home / ".claude" / "agents" / "paircode-peer.md"
     assert slash_cmd.exists(), "Slash command missing"
-    assert peer_agent.exists(), "paircode-peer sub-agent missing — Agent() spawn will fail"
+    assert "paircode roster" in slash_cmd.read_text(), (
+        "Template should reference `paircode roster` — core helper used by team lead"
+    )
 
 
 def test_installer_gemini_calls_extensions_install_via_invoke(tmp_path, monkeypatch):

@@ -164,12 +164,68 @@ def focus_active() -> None:
 # ---------------------------------------------------------------------------
 
 @main.command()
-def roster() -> None:
-    """Print peer ids, one per line. Empty output if no roster exists."""
+@click.option("--alpha", "alpha_cli", default=None,
+              help="CLI acting as alpha (excluded from peers unless last resort).")
+@click.option("--peer", "peer_filter", default=None,
+              help="Narrow to a single peer id. Silently falls back if missing.")
+@click.option("--peers", "peers_filter", default=None,
+              help="Comma-separated peer ids. Silently falls back if none match.")
+def roster(alpha_cli: str | None, peer_filter: str | None, peers_filter: str | None) -> None:
+    """Print peer ids, one per line — best-effort, never errors.
+
+    Resolution order:
+      1. Apply --peer/--peers filter to the peers.yaml roster.
+      2. If --alpha is given, drop peers whose cli matches (except as last resort).
+      3. If the result is empty, fall back to "all peers except alpha".
+      4. If still empty, re-run handshake detection in case new CLIs landed.
+      5. If still empty and an alpha-cli peer exists, emit that as last resort.
+      6. If still empty, emit nothing — team lead must handle.
+    """
     state = find_paircode()
     if state is None:
         return
-    for p in read_peers(state):
+
+    all_peers = [p for p in read_peers(state) if p.get("id")]
+
+    # Step 1 — apply filter
+    if peers_filter:
+        wanted = [s.strip() for s in peers_filter.split(",") if s.strip()]
+        filtered = [p for p in all_peers if p.get("id") in wanted]
+    elif peer_filter:
+        filtered = [p for p in all_peers if p.get("id") == peer_filter]
+    else:
+        filtered = list(all_peers)
+
+    # Step 2 — alpha exclusion
+    def _exclude_alpha(peers: list[dict]) -> list[dict]:
+        if not alpha_cli:
+            return peers
+        return [p for p in peers if p.get("cli") != alpha_cli]
+
+    result = _exclude_alpha(filtered)
+
+    # Step 3 — fallback to "all peers except alpha" if filter missed
+    if not result and (peer_filter or peers_filter):
+        result = _exclude_alpha(all_peers)
+
+    # Step 4 — refresh detection (maybe user installed something since last handshake)
+    if not result:
+        proposed = propose_roster()
+        if proposed:
+            fresh_dicts = proposed_as_yaml_dicts(proposed)
+            known_ids = {p.get("id") for p in all_peers}
+            added = [p for p in fresh_dicts if p.get("id") not in known_ids]
+            if added:
+                write_peers(state, all_peers + added)
+                ensure_peer_dirs(state, proposed)
+                all_peers = all_peers + added
+                result = _exclude_alpha(all_peers)
+
+    # Step 5 — last resort: include alpha-cli peer if that's all we have
+    if not result:
+        result = list(all_peers)
+
+    for p in result:
         pid = p.get("id")
         if pid:
             click.echo(pid)
@@ -178,6 +234,33 @@ def roster() -> None:
 # ---------------------------------------------------------------------------
 # Invoke — fire one peer
 # ---------------------------------------------------------------------------
+
+@main.command()
+@click.argument("stage")
+def converge(stage: str) -> None:
+    """Converge a stage — copy each participant's latest `vN.md` to `{id}-FINAL.md`.
+
+    Runs on the active focus. Mechanical file-copy only; the slash command
+    writes `consensus.md` afterward from the FINAL files.
+    """
+    from paircode.seal import seal_stage
+
+    state = find_paircode()
+    if state is None or state.active_focus is None:
+        raise click.ClickException(
+            "No active focus. Run `paircode focus new <slug>` first."
+        )
+    stage_dir = state.active_focus / stage
+    if not stage_dir.exists():
+        raise click.ClickException(f"Stage dir not found: {stage_dir}")
+    sealed = seal_stage(stage_dir)
+    if not sealed:
+        raise click.ClickException(
+            f"No versioned files found in {stage_dir} — nothing to converge."
+        )
+    for s in sealed:
+        click.echo(f"{s.peer_id} → {s.final.name}")
+
 
 @main.command()
 @click.argument("peer_id")
