@@ -313,6 +313,152 @@ def invoke(peer_id: str, prompt: str, out_path: str, timeout: int, fast: bool) -
 
 
 # ---------------------------------------------------------------------------
+# peerlab — per-peer independent parallel labs with their own .git
+# ---------------------------------------------------------------------------
+
+@main.group()
+def peerlab() -> None:
+    """Per-peer parallel labs under .peerlab/<peer-id>/ with own .git each."""
+
+
+@peerlab.command("ensure")
+def peerlab_ensure() -> None:
+    """Scaffold .peerlab/<peer-id>/ per peer; seed from project root on first
+    creation; git init per lab; add .peerlab/ to outer .gitignore. Idempotent."""
+    from paircode.peerlab import ensure_peer_labs
+
+    state = find_paircode()
+    if state is None:
+        state = init_paircode()
+    results = ensure_peer_labs(state)
+    for r in results:
+        if r.status == "created":
+            click.echo(f"created {r.lab_path}")
+        elif r.status == "missing-id":
+            click.echo(f"skipped peer with no id", err=True)
+        # "already-exists" → silent, per auto-install ethos
+
+
+@peerlab.command("invoke")
+@click.argument("peer_id")
+@click.argument("prompt")
+@click.option("--out", "out_path", default=None, type=click.Path(),
+              help="Optional file-trace output (markdown). If omitted, peer stdout goes to stdout.")
+@click.option("--timeout", default=600, show_default=True,
+              help="Per-peer timeout in seconds")
+@click.option("--fast/--no-fast", default=False,
+              help="Apply cliworker speed flags")
+def peerlab_invoke(peer_id: str, prompt: str, out_path: str | None, timeout: int, fast: bool) -> None:
+    """Fire a peer CLI with cwd set to its lab. Peer works in-place."""
+    from paircode.peerlab import peer_lab_path
+
+    state = find_paircode()
+    if state is None:
+        raise click.ClickException(
+            "No .paircode/ found. Run `paircode ensure-scaffold` + `paircode peerlab ensure` first."
+        )
+    peers = read_peers(state)
+    peer = next((p for p in peers if p.get("id") == peer_id), None)
+    if peer is None:
+        known = [p.get("id") for p in peers]
+        raise click.ClickException(f"Unknown peer id: {peer_id!r}. Known: {known}")
+    lab = peer_lab_path(state, peer_id)
+    if not lab.exists():
+        raise click.ClickException(
+            f"Lab dir missing: {lab}. Run `paircode peerlab ensure` first."
+        )
+
+    # Preamble so the peer knows it's in a lab with its own git
+    framed_prompt = (
+        f"You are the {peer_id} peer working in your own lab at {lab}.\n"
+        f"Your cwd is already this lab. You have your own `.git/` here — commit\n"
+        f"your work (stage + commit) before finishing so the team lead can read\n"
+        f"the diff. Don't worry about alpha's repo; your lab is fully independent.\n"
+        f"\n"
+        f"Work:\n"
+        f"{prompt}"
+    )
+
+    from cliworker import get_spec, run as cliworker_run
+
+    spec = get_spec(str(peer.get("cli")), model=peer.get("model")) if peer.get("model") else get_spec(str(peer.get("cli")))
+    results = cliworker_run(
+        framed_prompt, spec,
+        fast=True if fast else None,
+        timeout_s=timeout,
+        cwd=str(lab),
+    )
+    cli_result = results[-1] if results else None
+    if cli_result is None:
+        raise click.ClickException(f"no result from cliworker for {peer.get('cli')}")
+
+    status = "ok" if cli_result.ok else "FAIL"
+    click.echo(f"{peer_id} {status} {cli_result.duration_s:.1f}s", err=True)
+
+    body = cli_result.stdout if cli_result.ok else (
+        f"# Peer run FAILED\n\n```\n{cli_result.stderr}\n```\n\n{cli_result.stdout}"
+    )
+
+    if out_path:
+        header = (
+            f"<!-- peer_id: {peer_id} -->\n"
+            f"<!-- cli: {peer.get('cli')} -->\n"
+            f"<!-- lab: {lab} -->\n"
+            f"<!-- duration_s: {cli_result.duration_s:.1f} -->\n"
+            f"<!-- ok: {cli_result.ok} -->\n"
+        )
+        timeout_kind = getattr(cli_result, "timeout_kind", None)
+        if timeout_kind:
+            header += f"<!-- timeout_kind: {timeout_kind} -->\n"
+        header += "\n"
+        Path(out_path).parent.mkdir(parents=True, exist_ok=True)
+        Path(out_path).write_text(header + body, encoding="utf-8")
+    else:
+        click.echo(body)
+
+    if not cli_result.ok:
+        raise SystemExit(1)
+
+
+@peerlab.command("list")
+def peerlab_list() -> None:
+    """Show peer labs with creation status + HEAD commit (if any)."""
+    from paircode.peerlab import peer_lab_path
+
+    state = find_paircode()
+    if state is None:
+        click.echo("No .paircode/ found. Nothing to list.")
+        return
+    peers = read_peers(state)
+    if not peers:
+        click.echo("No peers in roster.")
+        return
+    ptable = Table(show_header=True, header_style="bold")
+    ptable.add_column("peer")
+    ptable.add_column("lab path")
+    ptable.add_column("git HEAD")
+    import subprocess as _sub
+    for p in peers:
+        pid = p.get("id")
+        if not pid:
+            continue
+        lab = peer_lab_path(state, pid)
+        if not lab.exists():
+            ptable.add_row(pid, str(lab), "[dim](not created)[/dim]")
+            continue
+        if not (lab / ".git").exists():
+            ptable.add_row(pid, str(lab), "[yellow](no git)[/yellow]")
+            continue
+        r = _sub.run(
+            ["git", "-C", str(lab), "log", "-1", "--oneline"],
+            capture_output=True, text=True, check=False,
+        )
+        head = r.stdout.strip() if r.returncode == 0 and r.stdout.strip() else "[dim](no commits)[/dim]"
+        ptable.add_row(pid, str(lab), head)
+    console.print(ptable)
+
+
+# ---------------------------------------------------------------------------
 # Bare paircode — show state
 # ---------------------------------------------------------------------------
 

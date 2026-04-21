@@ -64,14 +64,19 @@ def install_claude(info: CliInfo) -> InstallResult:
         )
     commands_dir = info.config_dir / "commands"
     commands_dir.mkdir(parents=True, exist_ok=True)
-    target = commands_dir / "paircode.md"
-    target.write_text(
+    paircode_target = commands_dir / "paircode.md"
+    paircode_target.write_text(
         _read_template("claude/commands/paircode.md"),
         encoding="utf-8",
     )
+    peerlab_target = commands_dir / "peerlab.md"
+    peerlab_target.write_text(
+        _read_template("claude/commands/peerlab.md"),
+        encoding="utf-8",
+    )
     return InstallResult(
-        cli_name="claude", action="installed", path=target,
-        message=f"Wrote /paircode slash command to {target}.",
+        cli_name="claude", action="installed", path=paircode_target,
+        message=f"Wrote /paircode + /peerlab slash commands to {commands_dir}.",
     )
 
 
@@ -221,6 +226,7 @@ def uninstall_all() -> list[InstallResult]:
     claude_home = Path.home() / ".claude"
     claude_paths = [
         claude_home / "commands" / "paircode.md",
+        claude_home / "commands" / "peerlab.md",
         claude_home / "agents" / "paircode-peer.md",
     ]
     removed = []
