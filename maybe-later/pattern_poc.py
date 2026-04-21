@@ -19,9 +19,14 @@ any real paircode code. If we like it, the design maps cleanly into `state.py`:
   - `src/paircode/cli.py` — `paircode patterns` command, `--pattern` flag on
     `focus new`.
 
+Location: this lives under `maybe-later/` on purpose. It's a design
+artifact + runnable demo, NOT production code. `paircode focus new` does
+NOT use it. If we decide to promote it, the 3-file integration is listed
+above.
+
 Run this file directly:
 
-    ./scripts/pattern_poc.py
+    ./maybe-later/pattern_poc.py
 
 It will load both example patterns, print the parsed objects, and scaffold
 two demo focus dirs under /tmp/ showing that different patterns produce
