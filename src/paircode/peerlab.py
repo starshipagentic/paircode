@@ -1,14 +1,18 @@
 """Per-peer independent labs — each peer owns a parallel implementation
 of the project, with its own `.git/` for independent history.
 
-Laid out under `.peerlab/<peer-id>/` at the project root, gitignored from
-the outer repo. Seeding is one-time on first creation (rsync from project
-root minus a standard exclude list). After that, each peer's lab evolves
-independently — the peer commits, diffs, experiments in its own git.
+External peer labs live under `.peerlab/<peer-id>/` at the project root,
+gitignored from the outer repo. Seeding is one-time on first creation
+(rsync from project root minus a standard exclude list). After that, each
+peer's lab evolves independently — the peer commits, diffs, experiments
+in its own git.
 
-Used by the `/peerlab` slash command (separate concept from `/paircode`):
-team lead fires each peer with cwd = its lab, peers do real work and commit,
-team lead reads the resulting diffs and synthesizes.
+`/peerlab` architecture note: **alpha (the interactive LLM session, e.g.
+Claude Code) is itself a peer** — alpha's "lab" is the project root, not
+a subdir. This module manages the EXTERNAL peer labs (codex, gemini,
+ollama, ...). Alpha codes in the real project; externals code in their
+sandboxed labs; during cross-review every participant reads every other
+participant's code.
 """
 from __future__ import annotations
 

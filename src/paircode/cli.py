@@ -368,14 +368,21 @@ def peerlab_invoke(peer_id: str, prompt: str, out_path: str | None, timeout: int
             f"Lab dir missing: {lab}. Run `paircode peerlab ensure` first."
         )
 
-    # Preamble so the peer knows it's in a lab with its own git
+    # Preamble: peer knows where its lab is + that cross-reads outside the
+    # lab are allowed when the task says so (cross-review reads alpha's
+    # project root at ../../ and sibling peer labs at ../).
     framed_prompt = (
-        f"You are the {peer_id} peer working in your own lab at {lab}.\n"
-        f"Your cwd is already this lab. You have your own `.git/` here — commit\n"
-        f"your work (stage + commit) before finishing so the team lead can read\n"
-        f"the diff. Don't worry about alpha's repo; your lab is fully independent.\n"
+        f"You are the {peer_id} peer in a paircode peerlab run.\n"
+        f"Your own lab is at {lab} — that is your cwd. You have your own `.git/`\n"
+        f"here; commit your work in this lab before finishing so the team lead\n"
+        f"can read the diff. Modify files ONLY inside your own lab.\n"
         f"\n"
-        f"Work:\n"
+        f"The task below may instruct you to READ outside your lab — e.g.,\n"
+        f"alpha's project root at `../../` (alpha's lab) or sibling peer labs\n"
+        f"at `../<other-peer-id>/`. Read-only cross-reads are expected during\n"
+        f"cross-review rounds. Do not write outside your own lab.\n"
+        f"\n"
+        f"Task:\n"
         f"{prompt}"
     )
 
