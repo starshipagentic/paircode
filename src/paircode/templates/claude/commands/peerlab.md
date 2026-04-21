@@ -14,8 +14,10 @@ Separate concept from `/paircode` — no focus dirs, no stages, no consensus.md.
 
 ```bash
 paircode peerlab ensure           # idempotent: scaffold/seed/git-init each external peer lab
-PEERS=$(paircode roster --alpha claude)   # external peers (excludes alpha/claude)
+PEERS=$(paircode peerlab roster --alpha claude)   # external peers (excludes alpha/claude)
 ```
+
+Note: `/peerlab` is fully independent from `/paircode` — it maintains its own roster at `.peerlab/peers.yaml` and never touches `.paircode/`. You can use `/peerlab` on a project that has never seen `/paircode`.
 
 ## Step 2 — Work round (alpha + peers in parallel)
 

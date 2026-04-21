@@ -324,12 +324,15 @@ def peerlab() -> None:
 @peerlab.command("ensure")
 def peerlab_ensure() -> None:
     """Scaffold .peerlab/<peer-id>/ per peer; seed from project root on first
-    creation; git init per lab; add .peerlab/ to outer .gitignore. Idempotent."""
-    from paircode.peerlab import ensure_peer_labs
+    creation; git init per lab; add .peerlab/ to outer .gitignore. Idempotent.
 
-    state = find_paircode()
+    Uses .peerlab/peers.yaml (peerlab's own roster), not .paircode/.
+    """
+    from paircode.peerlab import ensure_peer_labs, find_peerlab, init_peerlab
+
+    state = find_peerlab()
     if state is None:
-        state = init_paircode()
+        state = init_peerlab()
     results = ensure_peer_labs(state)
     for r in results:
         if r.status == "created":
@@ -350,14 +353,14 @@ def peerlab_ensure() -> None:
               help="Apply cliworker speed flags")
 def peerlab_invoke(peer_id: str, prompt: str, out_path: str | None, timeout: int, fast: bool) -> None:
     """Fire a peer CLI with cwd set to its lab. Peer works in-place."""
-    from paircode.peerlab import peer_lab_path
+    from paircode.peerlab import find_peerlab, peer_lab_path, read_peerlab_peers
 
-    state = find_paircode()
+    state = find_peerlab()
     if state is None:
         raise click.ClickException(
-            "No .paircode/ found. Run `paircode ensure-scaffold` + `paircode peerlab ensure` first."
+            "No .peerlab/ found. Run `paircode peerlab ensure` first."
         )
-    peers = read_peers(state)
+    peers = read_peerlab_peers(state)
     peer = next((p for p in peers if p.get("id") == peer_id), None)
     if peer is None:
         known = [p.get("id") for p in peers]
@@ -430,15 +433,15 @@ def peerlab_invoke(peer_id: str, prompt: str, out_path: str | None, timeout: int
 @peerlab.command("list")
 def peerlab_list() -> None:
     """Show peer labs with creation status + HEAD commit (if any)."""
-    from paircode.peerlab import peer_lab_path
+    from paircode.peerlab import find_peerlab, peer_lab_path, read_peerlab_peers
 
-    state = find_paircode()
+    state = find_peerlab()
     if state is None:
-        click.echo("No .paircode/ found. Nothing to list.")
+        click.echo("No .peerlab/ found. Run `paircode peerlab ensure` first.")
         return
-    peers = read_peers(state)
+    peers = read_peerlab_peers(state)
     if not peers:
-        click.echo("No peers in roster.")
+        click.echo("No peers in .peerlab/peers.yaml roster.")
         return
     ptable = Table(show_header=True, header_style="bold")
     ptable.add_column("peer")
@@ -463,6 +466,51 @@ def peerlab_list() -> None:
         head = r.stdout.strip() if r.returncode == 0 and r.stdout.strip() else "[dim](no commits)[/dim]"
         ptable.add_row(pid, str(lab), head)
     console.print(ptable)
+
+
+@peerlab.command("roster")
+@click.option("--alpha", "alpha_cli", default=None,
+              help="CLI acting as alpha (excluded from peers unless last resort).")
+@click.option("--peer", "peer_filter", default=None,
+              help="Narrow to a single peer id. Silently falls back if missing.")
+@click.option("--peers", "peers_filter", default=None,
+              help="Comma-separated peer ids. Silently falls back if none match.")
+def peerlab_roster(alpha_cli: str | None, peer_filter: str | None, peers_filter: str | None) -> None:
+    """Print peerlab peer ids, one per line — best-effort, never errors.
+
+    Reads .peerlab/peers.yaml (peerlab's own roster, fully independent of
+    .paircode/). Same filter semantics as `paircode roster`.
+    """
+    from paircode.peerlab import find_peerlab, read_peerlab_peers
+
+    state = find_peerlab()
+    if state is None:
+        return
+    all_peers = [p for p in read_peerlab_peers(state) if p.get("id")]
+
+    if peers_filter:
+        wanted = [s.strip() for s in peers_filter.split(",") if s.strip()]
+        filtered = [p for p in all_peers if p.get("id") in wanted]
+    elif peer_filter:
+        filtered = [p for p in all_peers if p.get("id") == peer_filter]
+    else:
+        filtered = list(all_peers)
+
+    def _exclude_alpha(peers: list[dict]) -> list[dict]:
+        if not alpha_cli:
+            return peers
+        return [p for p in peers if p.get("cli") != alpha_cli]
+
+    result = _exclude_alpha(filtered)
+    if not result and (peer_filter or peers_filter):
+        result = _exclude_alpha(all_peers)
+    if not result:
+        result = list(all_peers)
+
+    for p in result:
+        pid = p.get("id")
+        if pid:
+            click.echo(pid)
 
 
 # ---------------------------------------------------------------------------

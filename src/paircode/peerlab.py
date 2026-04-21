@@ -1,18 +1,25 @@
 """Per-peer independent labs — each peer owns a parallel implementation
 of the project, with its own `.git/` for independent history.
 
-External peer labs live under `.peerlab/<peer-id>/` at the project root,
-gitignored from the outer repo. Seeding is one-time on first creation
-(rsync from project root minus a standard exclude list). After that, each
-peer's lab evolves independently — the peer commits, diffs, experiments
-in its own git.
+**Fully independent from `/paircode`.** `/peerlab` maintains its own state
+under `.peerlab/` at the project root:
 
-`/peerlab` architecture note: **alpha (the interactive LLM session, e.g.
-Claude Code) is itself a peer** — alpha's "lab" is the project root, not
-a subdir. This module manages the EXTERNAL peer labs (codex, gemini,
-ollama, ...). Alpha codes in the real project; externals code in their
-sandboxed labs; during cross-review every participant reads every other
-participant's code.
+  .peerlab/
+    peers.yaml              # peerlab's own roster
+    alpha-critique.md       # alpha's cross-review output (optional, written by slash command)
+    peer-a-codex/           # external peer lab (full parallel implementation, own .git)
+    peer-b-gemini/
+    ...
+
+`/peerlab` does NOT read or write `.paircode/`. If you use both `/paircode`
+and `/peerlab`, each maintains its own roster independently. That's
+intentional — `/peerlab` is designed to be useful as a standalone concept.
+
+Architecture: **alpha (the interactive LLM session, e.g. Claude Code) is
+itself a peer**. Alpha's "lab" is the project root — alpha codes directly
+in the real repo. This module manages the EXTERNAL peer labs (codex,
+gemini, ollama, ...). During cross-review every participant reads every
+other participant's code.
 """
 from __future__ import annotations
 
@@ -22,10 +29,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
-from paircode.state import PaircodeState, read_peers
+import yaml
 
 
 PEERLAB_DIRNAME = ".peerlab"
+PEERLAB_PEERS_FILE = "peers.yaml"
 
 SEED_EXCLUDES: tuple[str, ...] = (
     ".git",
@@ -45,10 +53,6 @@ SEED_EXCLUDES: tuple[str, ...] = (
 
 GITIGNORE_BLOCK_HEADER = "# peerlab — per-peer independent parallel labs"
 
-# Defaults dropped into each new peer lab's own .gitignore so peer commits
-# don't accidentally include Python bytecode, editor junk, OS cruft.
-# If the lab inherited a .gitignore from the project root (rsync seed), we
-# APPEND this block — user's rules win, these are a safety net.
 LAB_GITIGNORE_BLOCK = """\
 # peerlab defaults — python + editor junk (keep peer commits clean)
 __pycache__/
@@ -70,6 +74,21 @@ htmlcov/
 LAB_GITIGNORE_MARKER = "peerlab defaults"
 
 
+# ---------------------------------------------------------------------------
+# PeerlabState — independent of PaircodeState
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class PeerlabState:
+    """`.peerlab/` state. Fully independent from `.paircode/`."""
+    root: Path                    # path to .peerlab/ dir
+    peers_path: Path              # .peerlab/peers.yaml
+
+    @property
+    def project_root(self) -> Path:
+        return self.root.parent
+
+
 @dataclass(frozen=True)
 class EnsureResult:
     peer_id: str
@@ -77,16 +96,61 @@ class EnsureResult:
     status: str  # "created" | "already-exists" | "missing-id"
 
 
+def find_peerlab(start: Path | None = None) -> PeerlabState | None:
+    """Walk up from `start` (or cwd) looking for `.peerlab/`. Return None."""
+    if start is None:
+        start = Path.cwd()
+    start = start.resolve()
+    for ancestor in [start, *start.parents]:
+        root = ancestor / PEERLAB_DIRNAME
+        if root.is_dir():
+            return PeerlabState(root=root, peers_path=root / PEERLAB_PEERS_FILE)
+    return None
+
+
+def init_peerlab(project_root: Path | None = None) -> PeerlabState:
+    """Bootstrap `.peerlab/` in `project_root` (or cwd).
+
+    Creates the dir, runs handshake to detect peer CLIs, writes a fresh
+    `peers.yaml` to `.peerlab/peers.yaml` (if missing). `handshake.propose_roster`
+    is pure — reads PATH, doesn't touch any paircode state on disk.
+    """
+    if project_root is None:
+        project_root = Path.cwd()
+    project_root = project_root.resolve()
+    root = project_root / PEERLAB_DIRNAME
+    root.mkdir(exist_ok=True)
+    peers_path = root / PEERLAB_PEERS_FILE
+    if not peers_path.exists():
+        # Pure-function import; doesn't trigger any paircode state writes.
+        from paircode.handshake import propose_roster, proposed_as_yaml_dicts
+
+        proposed = propose_roster()
+        write_peerlab_peers(peers_path, proposed_as_yaml_dicts(proposed))
+    return PeerlabState(root=root, peers_path=peers_path)
+
+
+def read_peerlab_peers(state: PeerlabState) -> list[dict]:
+    """Parse `.peerlab/peers.yaml` into list of peer dicts. `[]` if missing."""
+    if not state.peers_path.exists():
+        return []
+    data = yaml.safe_load(state.peers_path.read_text(encoding="utf-8")) or {}
+    return list(data.get("peers") or [])
+
+
+def write_peerlab_peers(peers_path: Path, peers: Iterable[dict]) -> None:
+    peers_path.write_text(
+        yaml.safe_dump({"peers": list(peers)}, sort_keys=False, default_flow_style=False),
+        encoding="utf-8",
+    )
+
+
 # ---------------------------------------------------------------------------
-# Helpers — gitignore, rsync, git init, initial commit
+# Outer-repo gitignore — keep `.peerlab/` out of alpha's git
 # ---------------------------------------------------------------------------
 
 def ensure_gitignore(project_root: Path) -> bool:
-    """Append `.peerlab/` to outer .gitignore if not already present.
-
-    Returns True if the line was added (or the file was created), False if
-    it was already there.
-    """
+    """Append `.peerlab/` to outer `.gitignore` if not already present."""
     gitignore = project_root / ".gitignore"
     existing = gitignore.read_text(encoding="utf-8") if gitignore.exists() else ""
     for line in existing.splitlines():
@@ -99,9 +163,12 @@ def ensure_gitignore(project_root: Path) -> bool:
     return True
 
 
+# ---------------------------------------------------------------------------
+# Per-lab helpers — rsync seed, git init, initial commit, lab .gitignore
+# ---------------------------------------------------------------------------
+
 def _rsync_project(src: Path, dst: Path, excludes: Iterable[str] = SEED_EXCLUDES) -> None:
-    """Copy src → dst with standard excludes. Uses rsync if available, falls
-    back to `shutil.copytree` with an ignore function."""
+    """Copy src → dst with standard excludes. rsync if available, else shutil."""
     dst.mkdir(parents=True, exist_ok=True)
     rsync = shutil.which("rsync")
     if rsync:
@@ -112,13 +179,11 @@ def _rsync_project(src: Path, dst: Path, excludes: Iterable[str] = SEED_EXCLUDES
         subprocess.run(args, check=True)
         return
 
-    # Pure-Python fallback: copytree with an ignore func.
     exclude_set = set(excludes)
 
     def _ignore(_directory: str, names: list[str]) -> list[str]:
         ignored = []
         for n in names:
-            # Match exact name or a simple *-prefix/suffix wildcard
             if n in exclude_set:
                 ignored.append(n)
                 continue
@@ -129,23 +194,13 @@ def _rsync_project(src: Path, dst: Path, excludes: Iterable[str] = SEED_EXCLUDES
                     ignored.append(n); break
         return ignored
 
-    # copytree fails if dst exists — but our dst was just mkdir'd.
-    # Remove empty dst and let copytree re-create.
     if dst.exists() and not any(dst.iterdir()):
         dst.rmdir()
     shutil.copytree(src, dst, ignore=_ignore)
 
 
 def ensure_lab_gitignore(lab: Path) -> bool:
-    """Ensure the peer lab has Python/editor junk gitignored. Idempotent.
-
-    If the lab already has a `.gitignore` (inherited via rsync from the
-    project root), our block is appended so user rules win. If none exists
-    (greenfield), our block IS the .gitignore.
-
-    Returns True if the block was added this call, False if it was already
-    there (marker detection).
-    """
+    """Append the peerlab-defaults .gitignore block into the lab. Idempotent."""
     gitignore = lab / ".gitignore"
     existing = gitignore.read_text(encoding="utf-8") if gitignore.exists() else ""
     if LAB_GITIGNORE_MARKER in existing:
@@ -156,10 +211,8 @@ def ensure_lab_gitignore(lab: Path) -> bool:
 
 
 def _git_init(lab: Path) -> None:
-    """`git init` inside `lab/`. No-op if already inited."""
     if (lab / ".git").exists():
         return
-    # Try modern flag first, fall back for older git.
     result = subprocess.run(
         ["git", "init", "--quiet", "--initial-branch=main", str(lab)],
         capture_output=True, text=True, check=False,
@@ -171,32 +224,22 @@ def _git_init(lab: Path) -> None:
 def _git_initial_commit(
     lab: Path, peer_id: str, message: str = "initial seed from project root"
 ) -> bool:
-    """Stage everything + commit. Returns True if a commit was made.
-
-    Authors the commit as the peer itself (`{peer_id} <{peer_id}@peerlab.local>`)
-    via lab-local git config. Every subsequent peer commit inside this lab
-    inherits that local identity — so `git log` in a peer's lab attributes
-    all work to that peer, clean replay.
-    """
+    """Stage everything + commit as peer_id. Returns True if a commit was made."""
     if not any(lab.iterdir()):
         return False
-    # Local git config — scoped to this lab, doesn't touch global identity.
     subprocess.run(["git", "-C", str(lab), "config", "user.name", peer_id], check=False)
     subprocess.run(
         ["git", "-C", str(lab), "config", "user.email", f"{peer_id}@peerlab.local"],
         check=False,
     )
     subprocess.run(["git", "-C", str(lab), "add", "-A"], check=False)
-    # Commit only if there's something staged
     diff_check = subprocess.run(
-        ["git", "-C", str(lab), "diff", "--cached", "--quiet"],
-        check=False,
+        ["git", "-C", str(lab), "diff", "--cached", "--quiet"], check=False,
     )
     if diff_check.returncode == 0:
-        return False  # nothing staged
+        return False
     subprocess.run(
-        ["git", "-C", str(lab), "commit", "--quiet", "-m", message],
-        check=False,
+        ["git", "-C", str(lab), "commit", "--quiet", "-m", message], check=False,
     )
     return True
 
@@ -205,41 +248,34 @@ def _git_initial_commit(
 # Public — ensure per-peer labs
 # ---------------------------------------------------------------------------
 
-def ensure_peer_labs(state: PaircodeState) -> list[EnsureResult]:
-    """Scaffold `.peerlab/<peer-id>/` for every peer in `peers.yaml`.
+def ensure_peer_labs(state: PeerlabState) -> list[EnsureResult]:
+    """Scaffold `.peerlab/<peer-id>/` for every peer in `.peerlab/peers.yaml`.
 
     Idempotent. On first creation of a lab:
-    - mkdir `.peerlab/<peer-id>/`
+    - mkdir
     - rsync project root → lab (minus SEED_EXCLUDES)
-    - `git init` inside lab (own repo)
-    - initial commit so HEAD exists → peers can `git diff HEAD~1` immediately
+    - drop lab .gitignore
+    - `git init` inside lab
+    - initial commit authored as peer_id so HEAD exists + log attributes clean
 
     On subsequent calls: skip labs that already have `.git/` — never re-seed.
-    Also ensures the outer `.gitignore` contains `.peerlab/` so the outer repo
-    doesn't accidentally track peer labs.
+    Also ensures the outer `.gitignore` contains `.peerlab/`.
     """
     project_root = state.project_root
-    peerlab_root = project_root / PEERLAB_DIRNAME
-    peerlab_root.mkdir(exist_ok=True)
-
     ensure_gitignore(project_root)
 
     results: list[EnsureResult] = []
-    for p in read_peers(state):
+    for p in read_peerlab_peers(state):
         pid = p.get("id") if isinstance(p, dict) else getattr(p, "id", None)
         if not pid:
-            results.append(EnsureResult(peer_id="?", lab_path=peerlab_root, status="missing-id"))
+            results.append(EnsureResult(peer_id="?", lab_path=state.root, status="missing-id"))
             continue
-        lab = peerlab_root / pid
+        lab = state.root / pid
         if (lab / ".git").exists():
             results.append(EnsureResult(peer_id=pid, lab_path=lab, status="already-exists"))
             continue
         lab.mkdir(exist_ok=True)
-        # Seed from project root (might be empty for greenfield — rsync handles fine)
         _rsync_project(project_root, lab)
-        # Drop peerlab-default .gitignore so peer commits don't pull in
-        # __pycache__, .pytest_cache, editor junk etc. Appends if the lab
-        # already inherited a .gitignore from the project root.
         ensure_lab_gitignore(lab)
         _git_init(lab)
         _git_initial_commit(lab, pid, message="initial seed from project root")
@@ -247,6 +283,6 @@ def ensure_peer_labs(state: PaircodeState) -> list[EnsureResult]:
     return results
 
 
-def peer_lab_path(state: PaircodeState, peer_id: str) -> Path:
+def peer_lab_path(state: PeerlabState, peer_id: str) -> Path:
     """Return the absolute lab path for a peer id. Does not create."""
-    return state.project_root / PEERLAB_DIRNAME / peer_id
+    return state.root / peer_id
